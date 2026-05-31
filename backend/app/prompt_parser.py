@@ -6,17 +6,19 @@ from dataclasses import dataclass
 
 KEYWORD_MAP: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("explosion", "boom", "impact", "blast", "폭발", "폭발음"), ("explosion", "boom", "impact")),
-    (("magic", "spell", "magical", "마법"), ("magic", "spell", "fantasy")),
-    (("dark", "shadow", "암흑", "어둠"), ("dark", "deep")),
-    (("heavy", "bass", "묵직"), ("heavy", "low", "bass", "boom")),
-    (("short", "짧"), ("short",)),
-    (("sharp", "날카"), ("sharp", "metallic")),
+    (("magic", "spell", "magical", "마법", "주문"), ("magic", "spell", "fantasy")),
+    (("dark", "shadow", "암흑", "어둠", "다크"), ("dark", "deep")),
+    (("heavy", "bass", "묵직", "저음"), ("heavy", "low", "bass", "boom")),
+    (("short", "짧", "원샷", "짧은"), ("short", "one-shot")),
+    (("sharp", "날카", "쨍한"), ("sharp", "metallic")),
     (("sword", "slash", "blade", "검", "칼", "베기"), ("sword", "slash", "blade")),
-    (("footstep", "발소리"), ("footstep",)),
-    (("button", "click", "버튼"), ("button", "click")),
+    (("footstep", "발소리", "걸음"), ("footstep",)),
+    (("button", "click", "버튼", "클릭"), ("button", "click", "ui")),
     (("wind", "바람"), ("wind",)),
     (("fire", "flame", "불", "화염"), ("fire", "flame")),
-    (("water", "물"), ("water",)),
+    (("water", "물", "물소리"), ("water",)),
+    (("game", "게임", "효과음", "게임용", "sfx"), ("game", "sfx")),
+    (("bgm", "브금", "배경음악", "루프", "loop"), ("bgm", "loop", "music")),
 )
 
 
@@ -54,4 +56,3 @@ def parse_prompt(prompt: str) -> ParsedPrompt:
     query = " ".join(include_terms) if include_terms else cleaned
 
     return ParsedPrompt(original=cleaned, query=query, include_terms=include_terms)
-

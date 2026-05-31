@@ -79,6 +79,11 @@
               />
             </label>
 
+            <label class="toggle-field">
+              <input id="game-ready" name="game-ready" type="checkbox" checked />
+              <span>게임용 우선</span>
+            </label>
+
             <button type="submit">검색</button>
           </div>
         </form>
@@ -121,6 +126,12 @@
         <div class="tags"></div>
         <div class="analysis-actions">
           <button type="button" data-action="waveform">파형 보기</button>
+          <button type="button" data-action="loop" aria-pressed="false">루프 듣기</button>
+          <button type="button" data-action="loop-start">A</button>
+          <button type="button" data-action="loop-end">B</button>
+          <button type="button" data-action="segment-loop" aria-pressed="false">구간 루프</button>
+          <button type="button" data-action="clear-loop">해제</button>
+          <span class="loop-status">루프 꺼짐</span>
         </div>
         <div class="feedback-actions" aria-label="사용자 평가">
           <button type="button" data-feedback="good" aria-pressed="false">좋음</button>

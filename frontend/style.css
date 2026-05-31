@@ -180,9 +180,31 @@ select {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) repeat(3, minmax(96px, 0.5fr)) auto;
+  grid-template-columns: minmax(160px, 1fr) repeat(3, minmax(96px, 0.5fr)) minmax(120px, 0.45fr) auto;
   gap: 10px;
   align-items: end;
+}
+
+.toggle-field {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2937;
+  padding: 0 12px;
+}
+
+.toggle-field input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent);
+}
+
+.toggle-field span {
+  white-space: nowrap;
 }
 
 .status-row {
@@ -397,7 +419,9 @@ audio {
 }
 
 .feedback-actions button.is-selected,
-.feedback-actions button[aria-pressed="true"] {
+.feedback-actions button[aria-pressed="true"],
+.analysis-actions button.is-selected,
+.analysis-actions button[aria-pressed="true"] {
   border-color: var(--accent);
   background: #0f766e;
   color: #ffffff;
@@ -406,6 +430,20 @@ audio {
 .analysis-actions button:disabled {
   cursor: wait;
   opacity: 0.65;
+}
+
+.loop-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0 10px;
 }
 
 .card-actions > * {

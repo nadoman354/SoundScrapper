@@ -24,12 +24,13 @@ from backend.app.schemas import FeedbackRequest, SoundAnalysis, SoundSearchResul
 
 
 def test_parse_prompt_expands_korean_keywords() -> None:
-    parsed = parse_prompt("짧고 묵직한 암흑 마법 폭발음")
+    parsed = parse_prompt("짧고 묵직한 암흑 마법 폭발음 게임용")
 
     assert "explosion" in parsed.query
     assert "magic" in parsed.query
     assert "dark" in parsed.query
     assert "heavy" in parsed.query
+    assert "sfx" in parsed.query
 
 
 def test_ranker_prefers_matching_cc0_sound() -> None:
@@ -48,6 +49,66 @@ def test_ranker_prefers_matching_cc0_sound() -> None:
     assert scored.score > 80
     assert any("CC0" in reason for reason in scored.score_reasons)
     assert any("검색어 일치" in reason for reason in scored.score_reasons)
+
+
+def test_ranker_game_ready_prefers_clean_short_sfx() -> None:
+    parsed = parse_prompt("button click")
+    clean = SoundSearchResult(
+        id=2,
+        name="Clean UI Click SFX",
+        license="Creative Commons 0",
+        duration=0.35,
+        tags=["clean", "ui", "click", "sfx"],
+        preview_url="https://example.com/click.mp3",
+    )
+    noisy = SoundSearchResult(
+        id=3,
+        name="Street ambience field recording",
+        license="Creative Commons 0",
+        duration=14,
+        tags=["ambience", "field-recording", "noise", "traffic"],
+        preview_url="https://example.com/noise.mp3",
+    )
+
+    clean_scored = score_sound(clean, parsed, min_duration=0.1, max_duration=15, game_ready=True)
+    noisy_scored = score_sound(noisy, parsed, min_duration=0.1, max_duration=15, game_ready=True)
+
+    assert clean_scored.score > noisy_scored.score
+    assert any("게임용" in reason for reason in clean_scored.score_reasons)
+    assert any("환경음/잡음" in reason for reason in noisy_scored.score_reasons)
+
+
+def test_ranker_game_ready_uses_cached_waveform_analysis() -> None:
+    parsed = parse_prompt("magic impact")
+    result = SoundSearchResult(
+        id=4,
+        name="Magic Impact",
+        license="Creative Commons 0",
+        duration=2,
+        tags=["magic", "impact", "sfx"],
+        preview_url="https://example.com/magic.mp3",
+    )
+    analysis = SoundAnalysis(
+        id=4,
+        preview_url="https://example.com/magic.mp3",
+        duration=2,
+        waveform=[0, 0.82, 0.7, 0.03, 0.02, 0.9, 0.72, 0.01],
+        leading_silence_seconds=0.04,
+        emptiness_score=8,
+        sharpness_score=40,
+    )
+
+    scored = score_sound(
+        result,
+        parsed,
+        min_duration=0.1,
+        max_duration=5,
+        game_ready=True,
+        analysis=analysis,
+    )
+
+    assert any("파형 분리 쉬움" in reason for reason in scored.score_reasons)
+    assert any("앞 무음 적음" in reason for reason in scored.score_reasons)
 
 
 def test_db_save_and_list_round_trip(tmp_path: Path) -> None:

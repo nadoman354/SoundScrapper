@@ -33,6 +33,10 @@ function formNumber(id, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function checkboxValue(id) {
+  return document.querySelector(id)?.checked ?? false;
+}
+
 function buildSearchPayload() {
   return {
     prompt: document.querySelector("#prompt").value.trim(),
@@ -40,6 +44,7 @@ function buildSearchPayload() {
     min_duration: formNumber("#min-duration", 0.1),
     max_duration: formNumber("#max-duration", 3.0),
     page_size: Math.trunc(formNumber("#page-size", 20)),
+    game_ready: checkboxValue("#game-ready"),
   };
 }
 
@@ -121,6 +126,19 @@ function renderSoundCard(sound) {
     audio.remove();
   }
 
+  const loopState = {
+    full: false,
+    segment: false,
+    start: 0,
+    end: null,
+  };
+  const loopControls = loopControlElements(node);
+  if (sound.preview_url) {
+    setupLoopControls(audio, sound, loopState, loopControls);
+  } else {
+    disableLoopControls(loopControls);
+  }
+
   node.querySelector(".description").textContent = sound.description || "";
   renderTags(node.querySelector(".tags"), sound.tags || []);
 
@@ -158,8 +176,8 @@ function renderSoundCard(sound) {
         waveformPanel.hidden = false;
         renderMetrics(metrics, analysis);
         appendAnalysisReasons(node.querySelector(".score-reasons"), analysis);
-        drawWaveform(canvas, analysis, 0);
-        bindWaveformSeek(canvas, audio, sound, analysis);
+        drawWaveform(canvas, analysis, 0, loopState);
+        bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
         await saveAnalysis(analysis);
         waveformButton.textContent = "파형 갱신";
         setStatus(`파형 분석 완료: ${sound.name}`);
@@ -218,6 +236,148 @@ function markFeedbackSelected(soundId, feedbackType, node) {
     button.classList.toggle("is-selected", selected);
     button.setAttribute("aria-pressed", String(selected));
   }
+}
+
+function loopControlElements(node) {
+  return {
+    fullButton: node.querySelector("[data-action='loop']"),
+    startButton: node.querySelector("[data-action='loop-start']"),
+    endButton: node.querySelector("[data-action='loop-end']"),
+    segmentButton: node.querySelector("[data-action='segment-loop']"),
+    clearButton: node.querySelector("[data-action='clear-loop']"),
+    status: node.querySelector(".loop-status"),
+    onChange: null,
+  };
+}
+
+function disableLoopControls(controls) {
+  for (const button of loopButtons(controls)) {
+    button.disabled = true;
+  }
+  controls.status.textContent = "미리듣기 없음";
+}
+
+function setupLoopControls(audio, sound, loopState, controls) {
+  controls.fullButton.addEventListener("click", () => {
+    loopState.full = !loopState.full;
+    if (loopState.full) {
+      loopState.segment = false;
+      audio.loop = true;
+      audio.play().catch(() => {});
+    } else {
+      audio.loop = false;
+    }
+    updateLoopControls(loopState, controls);
+  });
+
+  controls.startButton.addEventListener("click", () => {
+    const duration = getDuration(audio, sound);
+    const current = clampTime(audio.currentTime || 0, duration);
+    const latestStart = Math.max(0, duration - 0.05);
+    loopState.start = Math.min(current, latestStart);
+    if (loopState.end !== null && loopState.end <= loopState.start + 0.05) {
+      loopState.end = null;
+      loopState.segment = false;
+    }
+    updateLoopControls(loopState, controls);
+  });
+
+  controls.endButton.addEventListener("click", () => {
+    const duration = getDuration(audio, sound);
+    const end = clampTime(audio.currentTime || duration, duration);
+    loopState.end = Math.max(end, Math.min(duration, loopState.start + 0.15));
+    if (loopState.end <= loopState.start) {
+      loopState.start = Math.max(0, loopState.end - 0.15);
+    }
+    updateLoopControls(loopState, controls);
+  });
+
+  controls.segmentButton.addEventListener("click", () => {
+    loopState.segment = !loopState.segment;
+    if (loopState.segment) {
+      const duration = getDuration(audio, sound);
+      if (loopState.end === null || loopState.end <= loopState.start + 0.05) {
+        const fallbackLength = Math.min(1.5, Math.max(0.25, duration - loopState.start));
+        loopState.end = Math.min(duration, loopState.start + fallbackLength);
+      }
+      if (loopState.end <= loopState.start) {
+        loopState.start = Math.max(0, duration - 0.25);
+        loopState.end = duration;
+      }
+      loopState.full = false;
+      audio.loop = false;
+      audio.currentTime = loopState.start;
+      audio.play().catch(() => {});
+    }
+    updateLoopControls(loopState, controls);
+  });
+
+  controls.clearButton.addEventListener("click", () => {
+    loopState.full = false;
+    loopState.segment = false;
+    loopState.start = 0;
+    loopState.end = null;
+    audio.loop = false;
+    updateLoopControls(loopState, controls);
+  });
+
+  audio.addEventListener("timeupdate", () => {
+    if (!loopState.segment || loopState.end === null) {
+      return;
+    }
+    if (audio.currentTime >= loopState.end) {
+      audio.currentTime = loopState.start;
+      audio.play().catch(() => {});
+    }
+  });
+
+  updateLoopControls(loopState, controls);
+}
+
+function updateLoopControls(loopState, controls) {
+  controls.fullButton.classList.toggle("is-selected", loopState.full);
+  controls.fullButton.setAttribute("aria-pressed", String(loopState.full));
+  controls.segmentButton.classList.toggle("is-selected", loopState.segment);
+  controls.segmentButton.setAttribute("aria-pressed", String(loopState.segment));
+
+  if (loopState.segment && loopState.end !== null) {
+    controls.status.textContent = `구간 ${formatTime(loopState.start)}-${formatTime(loopState.end)}`;
+  } else if (loopState.full) {
+    controls.status.textContent = "전체 루프";
+  } else if (loopState.end !== null) {
+    controls.status.textContent = `A/B ${formatTime(loopState.start)}-${formatTime(loopState.end)}`;
+  } else if (loopState.start > 0) {
+    controls.status.textContent = `A ${formatTime(loopState.start)}`;
+  } else {
+    controls.status.textContent = "루프 꺼짐";
+  }
+
+  controls.onChange?.();
+}
+
+function loopButtons(controls) {
+  return [
+    controls.fullButton,
+    controls.startButton,
+    controls.endButton,
+    controls.segmentButton,
+    controls.clearButton,
+  ];
+}
+
+function getDuration(audio, sound) {
+  if (Number.isFinite(audio.duration) && audio.duration > 0) {
+    return audio.duration;
+  }
+  return Math.max(0.1, sound.duration || 0.1);
+}
+
+function clampTime(value, duration) {
+  return Math.max(0, Math.min(value, Math.max(0.1, duration)));
+}
+
+function formatTime(value) {
+  return `${value.toFixed(2)}초`;
 }
 
 function renderResults(results) {
@@ -478,7 +638,7 @@ function metric(label, value) {
   return item;
 }
 
-function drawWaveform(canvas, analysis, progressRatio = 0) {
+function drawWaveform(canvas, analysis, progressRatio = 0, loopState = null) {
   const waveform = analysis.waveform;
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -508,7 +668,22 @@ function drawWaveform(canvas, analysis, progressRatio = 0) {
   ctx.lineTo(width, height / 2);
   ctx.stroke();
 
-  const barWidth = width / waveform.length;
+  if (loopState && loopState.end !== null) {
+    const startRatio = Math.max(0, Math.min(1, loopState.start / duration));
+    const endRatio = Math.max(startRatio, Math.min(1, loopState.end / duration));
+    const startX = startRatio * width;
+    const endX = endRatio * width;
+    ctx.fillStyle = loopState.segment ? "rgba(249, 115, 22, 0.18)" : "rgba(15, 118, 110, 0.11)";
+    ctx.fillRect(startX, 0, Math.max(2, endX - startX), height);
+    ctx.fillStyle = loopState.segment ? "#c75a16" : "#0f766e";
+    ctx.fillRect(startX, 0, Math.max(2, 2 * dpr), height);
+    ctx.fillRect(endX, 0, Math.max(2, 2 * dpr), height);
+    ctx.font = `${Math.max(10, 11 * dpr)}px sans-serif`;
+    ctx.fillText("A", startX + 4 * dpr, height - 8 * dpr);
+    ctx.fillText("B", Math.max(4 * dpr, endX - 14 * dpr), height - 8 * dpr);
+  }
+
+  const barWidth = width / Math.max(1, waveform.length);
   ctx.fillStyle = "#0f766e";
   waveform.forEach((value, index) => {
     const barHeight = Math.max(2, value * height * 0.82);
@@ -527,22 +702,26 @@ function drawWaveform(canvas, analysis, progressRatio = 0) {
   ctx.fill();
 }
 
-function bindWaveformSeek(canvas, audio, sound, analysis) {
+function bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls) {
   if (canvas.dataset.bound === "true") {
     return;
   }
   canvas.dataset.bound = "true";
+  loopControls.onChange = () => {
+    const duration = getDuration(audio, sound);
+    drawWaveform(canvas, analysis, audio.currentTime / Math.max(duration, 0.1), loopState);
+  };
   canvas.addEventListener("click", (event) => {
     const rect = canvas.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    const duration = Number.isFinite(audio.duration) ? audio.duration : sound.duration;
+    const duration = getDuration(audio, sound);
     audio.currentTime = ratio * duration;
-    drawWaveform(canvas, analysis, ratio);
+    drawWaveform(canvas, analysis, ratio, loopState);
     audio.play().catch(() => {});
   });
   audio.addEventListener("timeupdate", () => {
-    const duration = Number.isFinite(audio.duration) ? audio.duration : sound.duration;
-    drawWaveform(canvas, analysis, audio.currentTime / Math.max(duration, 0.1));
+    const duration = getDuration(audio, sound);
+    drawWaveform(canvas, analysis, audio.currentTime / Math.max(duration, 0.1), loopState);
   });
 }
 
