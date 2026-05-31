@@ -41,3 +41,11 @@ Reason:
   paid persistent disk.
 - The deployment remains link-shared without authentication, matching the
   current project scope.
+
+### Prefer Google Cloud Compute Engine for the active deployment path
+Reason:
+- Google Cloud is easier to access than Oracle Cloud for this project context.
+- Compute Engine Free Tier can run an `e2-micro` VM with a standard persistent
+  disk, which fits the current FastAPI + SQLite architecture.
+- Budget alerts and the Google Cloud console reduce operational risk compared
+  with troubleshooting Oracle capacity and account constraints.

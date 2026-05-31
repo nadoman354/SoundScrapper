@@ -59,10 +59,55 @@ python -m ruff check .
 python -m pytest
 ```
 
+## Google Cloud Free Tier Deployment
+
+The preferred low-cost deployment path is a Google Cloud Compute Engine
+`e2-micro` Ubuntu VM. This repo includes deployment files in `deploy/google/`.
+
+Use this when you want persistent SQLite data and a service that can remain
+online without a paid app-hosting plan:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/nadoman354/SoundScrapper.git
+cd SoundScrapper
+sudo bash deploy/google/setup_ubuntu.sh
+sudo nano /opt/soundscrapper/.env
+sudo systemctl restart soundscrapper
+```
+
+Recommended Google Cloud Free Tier settings:
+
+```text
+Machine type: e2-micro
+Region: us-west1, us-central1, or us-east1
+Boot disk: Standard persistent disk, 30 GB or less
+Network: allow HTTP traffic on port 80
+```
+
+The Google deployment uses these production paths:
+
+```text
+SOUNDSCRAPPER_DB_PATH=/var/lib/soundscrapper/sound_scout.db
+SOUNDSCRAPPER_PREVIEW_CACHE_DIR=/var/lib/soundscrapper/previews
+```
+
+Check the deployed app:
+
+```text
+http://<external-ip>/health
+http://<external-ip>/
+```
+
+Set a Google Cloud budget alert before sharing the link. See
+`deploy/google/README.md` for the full VM setup, firewall command, update
+commands, and cost risks.
+
 ## Oracle Always Free Deployment
 
-The zero-cost deployment path is an Oracle Cloud Infrastructure (OCI) Always
-Free Ubuntu VM. This repo includes Ubuntu deployment files in
+The Oracle Cloud Infrastructure (OCI) Always Free Ubuntu VM path remains
+available as an alternative. This repo includes Ubuntu deployment files in
 `deploy/oracle/`.
 
 Use this when you want persistent SQLite data without paying for a Render disk:
