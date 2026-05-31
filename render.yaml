@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: soundscrapper
+    runtime: python
+    region: singapore
+    plan: starter
+    buildCommand: "python -m pip install --upgrade pip && python -m pip install -e ."
+    startCommand: "python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    disk:
+      name: soundscrapper-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: FREESOUND_API_KEY
+        sync: false
+      - key: SOUNDSCRAPPER_DB_PATH
+        value: /data/sound_scout.db
+      - key: SOUNDSCRAPPER_PREVIEW_CACHE_DIR
+        value: /data/previews
+      - key: FREESOUND_BASE_URL
+        value: https://freesound.org

@@ -1,0 +1,120 @@
+# SoundScrapper
+
+SoundScrapper is a Sound Scout MVP for finding game-ready sound candidates from
+Freesound. It provides prompt-based search, preview playback, waveform
+inspection, license/duration filtering, saved candidates, audio analysis metrics,
+and lightweight user feedback learning backed by SQLite.
+
+## Stack
+
+- Backend: FastAPI
+- Frontend: HTML, CSS, vanilla JavaScript
+- Database: SQLite
+- Source API: Freesound APIv2 token authentication
+
+## Setup
+
+1. Create a Python environment.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+```
+
+2. Create `.env` from `.env.example`.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+3. Add your Freesound API key.
+
+```text
+FREESOUND_API_KEY=your_api_key_here
+SOUNDSCRAPPER_DB_PATH=sound_scout.db
+SOUNDSCRAPPER_PREVIEW_CACHE_DIR=.cache/previews
+FREESOUND_BASE_URL=https://freesound.org
+```
+
+4. Run the server.
+
+```powershell
+uvicorn backend.app.main:app --reload
+```
+
+5. Open the local app.
+
+```text
+http://127.0.0.1:8000/
+```
+
+## Verification
+
+Run static analysis before tests after code changes.
+
+```powershell
+python -m compileall backend scripts
+python -m ruff check .
+python -m pytest
+```
+
+## Render Deployment
+
+This repo includes a Render Blueprint in `render.yaml`. It deploys the FastAPI
+backend and the static frontend as a single Render Web Service.
+
+1. Push this repo to GitHub.
+2. In Render, create a new Blueprint or Web Service from the GitHub repo.
+3. Use the settings from `render.yaml`.
+4. In the Render dashboard, set `FREESOUND_API_KEY` manually.
+5. Confirm the persistent disk is mounted at `/data`.
+6. Open the deployed URL and check `/health`.
+
+Render uses these production paths:
+
+```text
+SOUNDSCRAPPER_DB_PATH=/data/sound_scout.db
+SOUNDSCRAPPER_PREVIEW_CACHE_DIR=/data/previews
+```
+
+The server starts with:
+
+```bash
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+```
+
+The deployed app is link-shared, not authenticated. Anyone with the URL can use
+search, save candidates, and submit feedback. Keep the URL private if the
+feedback data should remain personal.
+
+The local `sound_scout.db` is not deployed. The Render service starts with a new
+SQLite database on the persistent disk, then keeps saved sounds, analyses,
+feedback, and preview cache across restarts and redeploys.
+
+## MVP Scope
+
+Included:
+
+- `GET /health`
+- `POST /api/search`
+- `POST /api/saved-sounds`
+- `GET /api/saved-sounds`
+- `GET /api/preview-audio/{sound_id}`
+- `POST /api/preview-cache/{sound_id}`
+- `POST /api/sound-analyses`
+- `GET /api/sound-analyses/{sound_id}`
+- `POST /api/feedback`
+- Freesound search using explicit fields
+- SQLite saved candidates, analysis metrics, and feedback
+- Waveform inspection from result cards
+- Lightweight feedback-based score adjustment
+- Static frontend served by FastAPI
+
+Not included yet:
+
+- Unity project integration
+- YouTube search or download
+- React or Electron packaging
+- Heavy AI or embedding reranking
+- Authentication

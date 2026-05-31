@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SoundScrapper</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="toolbar" aria-label="사운드 검색 조건">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <h1>SoundScrapper</h1>
+            <p>사운드 후보 탐색기</p>
+          </div>
+        </div>
+
+        <form id="search-form" class="search-form">
+          <label class="prompt-field">
+            <span>검색 프롬프트</span>
+            <input
+              id="prompt"
+              name="prompt"
+              type="search"
+              placeholder="짧고 묵직한 암흑 마법 폭발음"
+              autocomplete="off"
+              required
+            />
+          </label>
+
+          <div class="filters">
+            <label>
+              <span>라이선스</span>
+              <select id="license" name="license">
+                <option value="commercial" selected>상업 사용 우선</option>
+                <option value="cc0">CC0만</option>
+                <option value="any">전체</option>
+              </select>
+            </label>
+
+            <label>
+              <span>최소 길이</span>
+              <input
+                id="min-duration"
+                name="min-duration"
+                type="number"
+                min="0"
+                step="0.1"
+                value="0.1"
+              />
+            </label>
+
+            <label>
+              <span>최대 길이</span>
+              <input
+                id="max-duration"
+                name="max-duration"
+                type="number"
+                min="0.1"
+                step="0.1"
+                value="3.0"
+              />
+            </label>
+
+            <label>
+              <span>후보 수</span>
+              <input
+                id="page-size"
+                name="page-size"
+                type="number"
+                min="1"
+                max="50"
+                step="1"
+                value="20"
+              />
+            </label>
+
+            <button type="submit">검색</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="status-row" aria-live="polite">
+        <div id="status">검색어를 입력하세요.</div>
+        <button id="refresh-saved" type="button">저장 목록 새로고침</button>
+      </section>
+
+      <section class="content-grid">
+        <section class="results-panel">
+          <h2>검색 결과</h2>
+          <div id="results" class="sound-grid"></div>
+        </section>
+
+        <aside class="saved-panel">
+          <h2>저장한 후보</h2>
+          <div id="saved" class="saved-list"></div>
+        </aside>
+      </section>
+    </main>
+
+    <template id="sound-card-template">
+      <article class="sound-card">
+        <div class="card-head">
+          <div>
+            <h3></h3>
+            <p class="meta"></p>
+          </div>
+          <strong class="score" aria-label="점수"></strong>
+        </div>
+        <audio controls preload="none"></audio>
+        <div class="score-reasons"></div>
+        <div class="waveform-panel" hidden>
+          <canvas class="waveform-canvas" width="640" height="96"></canvas>
+          <div class="analysis-metrics"></div>
+        </div>
+        <p class="description"></p>
+        <div class="tags"></div>
+        <div class="analysis-actions">
+          <button type="button" data-action="waveform">파형 보기</button>
+        </div>
+        <div class="feedback-actions" aria-label="사용자 평가">
+          <button type="button" data-feedback="good" aria-pressed="false">좋음</button>
+          <button type="button" data-feedback="bad" aria-pressed="false">별로</button>
+          <button type="button" data-feedback="heavy_good" aria-pressed="false">묵직함 좋음</button>
+          <button type="button" data-feedback="too_sharp" aria-pressed="false">너무 날카로움</button>
+          <button type="button" data-feedback="magic_feel" aria-pressed="false">마법 느낌 있음</button>
+        </div>
+        <div class="card-actions">
+          <a target="_blank" rel="noreferrer">원본 보기</a>
+          <button type="button" data-action="save">저장</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

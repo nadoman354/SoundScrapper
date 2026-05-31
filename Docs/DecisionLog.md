@@ -1,0 +1,33 @@
+# Decision Log
+
+## 2026-05-31
+
+### Use Python FastAPI as backend
+Reason:
+- Python is a good fit for later audio analysis.
+- FastAPI gives simple local HTTP APIs for the frontend.
+- The MVP can remain lightweight while still hiding API credentials server-side.
+
+### Use HTML/CSS/Vanilla JS first
+Reason:
+- The MVP does not need React yet.
+- Static files keep setup and iteration simple.
+- A later React migration can happen after workflows stabilize.
+
+### Use SQLite for saved candidates
+Reason:
+- The tool is local-first.
+- SQLite is enough for saved sounds and search history.
+- It avoids adding a database service during the MVP.
+
+### Start with Freesound API
+Reason:
+- Freesound has an official API.
+- It provides metadata, tags, licenses, preview URLs, and analysis descriptors.
+- Token authentication is enough for read-only search.
+
+### Do not implement YouTube download
+Reason:
+- Downloading or analyzing YouTube audio has legal and Terms of Service risk.
+- YouTube can be revisited later as a candidate link helper only.
+
