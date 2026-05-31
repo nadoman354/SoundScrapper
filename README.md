@@ -59,10 +59,47 @@ python -m ruff check .
 python -m pytest
 ```
 
+## Oracle Always Free Deployment
+
+The zero-cost deployment path is an Oracle Cloud Infrastructure (OCI) Always
+Free Ubuntu VM. This repo includes Ubuntu deployment files in
+`deploy/oracle/`.
+
+Use this when you want persistent SQLite data without paying for a Render disk:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/nadoman354/SoundScrapper.git
+cd SoundScrapper
+sudo bash deploy/oracle/setup_ubuntu.sh
+sudo nano /opt/soundscrapper/.env
+sudo systemctl restart soundscrapper
+```
+
+The Oracle deployment uses these production paths:
+
+```text
+SOUNDSCRAPPER_DB_PATH=/var/lib/soundscrapper/sound_scout.db
+SOUNDSCRAPPER_PREVIEW_CACHE_DIR=/var/lib/soundscrapper/previews
+```
+
+Open port 80 in the OCI security rules, then check:
+
+```text
+http://<public-ip>/health
+http://<public-ip>/
+```
+
+See `deploy/oracle/README.md` for the VM shape, OCI Console steps, update
+commands, and risks. The deployed app is link-shared, not authenticated.
+
 ## Render Deployment
 
 This repo includes a Render Blueprint in `render.yaml`. It deploys the FastAPI
-backend and the static frontend as a single Render Web Service.
+backend and the static frontend as a single Render Web Service. This is now the
+paid managed-hosting alternative because the persistent disk requires a paid
+Render service.
 
 1. Push this repo to GitHub.
 2. In Render, create a new Blueprint or Web Service from the GitHub repo.

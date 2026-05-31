@@ -1,0 +1,22 @@
+[Unit]
+Description=SoundScrapper FastAPI service
+After=network.target
+
+[Service]
+Type=simple
+User=soundscrapper
+Group=soundscrapper
+WorkingDirectory=/opt/soundscrapper/app
+EnvironmentFile=/opt/soundscrapper/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/soundscrapper/app/.venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/soundscrapper
+
+[Install]
+WantedBy=multi-user.target

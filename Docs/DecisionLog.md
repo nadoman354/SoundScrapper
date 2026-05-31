@@ -31,3 +31,13 @@ Reason:
 - Downloading or analyzing YouTube audio has legal and Terms of Service risk.
 - YouTube can be revisited later as a candidate link helper only.
 
+## 2026-06-01
+
+### Use Oracle Cloud Always Free for the first public deployment
+Reason:
+- The app needs persistent SQLite data and preview cache, but not managed app
+  hosting features yet.
+- An OCI Ubuntu VM can keep the database and cache on the boot volume without a
+  paid persistent disk.
+- The deployment remains link-shared without authentication, matching the
+  current project scope.
