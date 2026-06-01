@@ -20,164 +20,183 @@
         </div>
       </header>
 
-      <section class="toolbar" aria-label="사운드 검색 조건">
-        <form id="search-form" class="search-form">
-          <label class="prompt-field">
-            <span>검색 프롬프트</span>
-            <input
-              id="prompt"
-              name="prompt"
-              type="search"
-              placeholder="짧고 묵직한 암흑 마법 폭발음"
-              autocomplete="off"
-              required
-            />
-          </label>
-          <div class="search-memory">
-            <button id="favorite-search" type="button">현재 검색어 즐겨찾기</button>
-            <div class="memory-row">
-              <span>최근</span>
-              <div id="recent-searches" class="memory-list"></div>
+      <section class="workspace-layout">
+        <div class="workspace-main">
+          <section class="toolbar" aria-label="사운드 검색 조건">
+            <form id="search-form" class="search-form">
+              <label class="prompt-field">
+                <span>검색 프롬프트</span>
+                <input
+                  id="prompt"
+                  name="prompt"
+                  type="search"
+                  placeholder="짧고 묵직한 암흑 마법 폭발음"
+                  autocomplete="off"
+                  required
+                />
+              </label>
+              <div class="search-memory">
+                <button id="favorite-search" type="button">현재 검색어 즐겨찾기</button>
+                <div class="memory-row">
+                  <span>최근</span>
+                  <div id="recent-searches" class="memory-list"></div>
+                </div>
+                <div class="memory-row">
+                  <span>즐겨찾기</span>
+                  <div id="favorite-searches" class="memory-list"></div>
+                </div>
+              </div>
+
+              <div class="filters">
+                <label>
+                  <span>라이선스</span>
+                  <select id="license" name="license">
+                    <option value="commercial" selected>상업 사용 우선</option>
+                    <option value="cc0">CC0만</option>
+                    <option value="any">전체</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>출처</span>
+                  <select id="source-filter" name="source-filter">
+                    <option value="all" selected>전체</option>
+                    <option value="freesound">Freesound</option>
+                    <option value="jamendo">Jamendo</option>
+                    <option value="openverse">Openverse</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>최소 길이</span>
+                  <input
+                    id="min-duration"
+                    name="min-duration"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value="0.1"
+                  />
+                </label>
+
+                <label>
+                  <span>최대 길이</span>
+                  <input
+                    id="max-duration"
+                    name="max-duration"
+                    type="number"
+                    min="0.1"
+                    step="0.1"
+                    value="3.0"
+                  />
+                </label>
+
+                <label>
+                  <span>후보 수</span>
+                  <input
+                    id="page-size"
+                    name="page-size"
+                    type="number"
+                    min="1"
+                    max="50"
+                    step="1"
+                    value="20"
+                  />
+                </label>
+
+                <label class="toggle-field">
+                  <input id="game-ready" name="game-ready" type="checkbox" checked />
+                  <span>게임용 우선</span>
+                </label>
+
+                <button type="submit">검색</button>
+              </div>
+
+              <fieldset class="condition-toggles" aria-describedby="condition-warning">
+                <legend>자주 쓰는 조건</legend>
+                <label class="condition-chip">
+                  <input type="checkbox" data-search-mode="clean_source" />
+                  <span>깨끗한 소스</span>
+                </label>
+                <label class="condition-chip">
+                  <input type="checkbox" data-search-mode="short_sfx" />
+                  <span>짧은 원샷 SFX</span>
+                </label>
+                <label class="condition-chip">
+                  <input type="checkbox" data-search-mode="easy_cut" />
+                  <span>컷오프 쉬움</span>
+                </label>
+                <label class="condition-chip">
+                  <input type="checkbox" data-search-mode="loop_bgm" />
+                  <span>루프/BGM 후보</span>
+                </label>
+                <label class="condition-chip">
+                  <input type="checkbox" data-search-mode="rights_safe" />
+                  <span>저작권 안전 우선</span>
+                </label>
+                <label class="condition-chip">
+                  <input id="auto-analyze" type="checkbox" />
+                  <span>상위 5개 자동 파형 분석</span>
+                </label>
+              </fieldset>
+            </form>
+          </section>
+
+          <section class="status-row" aria-live="polite">
+            <div id="status">검색어를 입력하세요.</div>
+            <div id="provider-status" class="provider-status" aria-label="API 연결 상태"></div>
+            <button id="refresh-saved" type="button">저장 목록 새로고침</button>
+          </section>
+          <div id="condition-warning" class="condition-warning" aria-live="polite"></div>
+
+          <section class="results-panel">
+            <h2>검색 결과</h2>
+            <div id="results" class="sound-grid"></div>
+          </section>
+        </div>
+
+        <aside id="saved-panel" class="saved-panel" aria-label="저장한 후보">
+          <button
+            id="saved-panel-toggle"
+            class="saved-panel-toggle"
+            type="button"
+            aria-controls="saved-panel-body"
+            aria-expanded="true"
+            aria-label="저장 후보 패널 접기"
+            title="저장 후보 패널 접기"
+          >
+            <span aria-hidden="true">›</span>
+          </button>
+          <div class="saved-panel-rail" aria-hidden="true">
+            <span>저장</span>
+            <strong id="saved-panel-count">0</strong>
+          </div>
+          <div id="saved-panel-body" class="saved-panel-body">
+            <h2>저장한 후보</h2>
+            <div class="folder-create">
+              <input id="new-folder-name" type="text" placeholder="새 폴더명" />
+              <button id="create-folder" type="button">폴더 생성</button>
             </div>
-            <div class="memory-row">
-              <span>즐겨찾기</span>
-              <div id="favorite-searches" class="memory-list"></div>
+            <div class="saved-controls">
+              <input id="saved-filter" type="search" placeholder="저장 후보 필터" />
+              <select id="saved-sort" aria-label="저장 후보 정렬">
+                <option value="recent">최근 저장순</option>
+                <option value="fit">적합도 높은 순</option>
+                <option value="score">점수 높은 순</option>
+                <option value="duration_asc">짧은 순</option>
+                <option value="duration_desc">긴 순</option>
+              </select>
+              <label>
+                <input id="saved-cc0" type="checkbox" />
+                <span>CC0만</span>
+              </label>
+              <label>
+                <input id="saved-good" type="checkbox" />
+                <span>좋음 평가만</span>
+              </label>
             </div>
+            <div id="saved" class="saved-list"></div>
           </div>
-
-          <div class="filters">
-            <label>
-              <span>라이선스</span>
-              <select id="license" name="license">
-                <option value="commercial" selected>상업 사용 우선</option>
-                <option value="cc0">CC0만</option>
-                <option value="any">전체</option>
-              </select>
-            </label>
-
-            <label>
-              <span>출처</span>
-              <select id="source-filter" name="source-filter">
-                <option value="all" selected>전체</option>
-                <option value="freesound">Freesound</option>
-                <option value="jamendo">Jamendo</option>
-                <option value="openverse">Openverse</option>
-              </select>
-            </label>
-
-            <label>
-              <span>최소 길이</span>
-              <input
-                id="min-duration"
-                name="min-duration"
-                type="number"
-                min="0"
-                step="0.1"
-                value="0.1"
-              />
-            </label>
-
-            <label>
-              <span>최대 길이</span>
-              <input
-                id="max-duration"
-                name="max-duration"
-                type="number"
-                min="0.1"
-                step="0.1"
-                value="3.0"
-              />
-            </label>
-
-            <label>
-              <span>후보 수</span>
-              <input
-                id="page-size"
-                name="page-size"
-                type="number"
-                min="1"
-                max="50"
-                step="1"
-                value="20"
-              />
-            </label>
-
-            <label class="toggle-field">
-              <input id="game-ready" name="game-ready" type="checkbox" checked />
-              <span>게임용 우선</span>
-            </label>
-
-            <button type="submit">검색</button>
-          </div>
-
-          <fieldset class="condition-toggles" aria-describedby="condition-warning">
-            <legend>자주 쓰는 조건</legend>
-            <label class="condition-chip">
-              <input type="checkbox" data-search-mode="clean_source" />
-              <span>깨끗한 소스</span>
-            </label>
-            <label class="condition-chip">
-              <input type="checkbox" data-search-mode="short_sfx" />
-              <span>짧은 원샷 SFX</span>
-            </label>
-            <label class="condition-chip">
-              <input type="checkbox" data-search-mode="easy_cut" />
-              <span>컷오프 쉬움</span>
-            </label>
-            <label class="condition-chip">
-              <input type="checkbox" data-search-mode="loop_bgm" />
-              <span>루프/BGM 후보</span>
-            </label>
-            <label class="condition-chip">
-              <input type="checkbox" data-search-mode="rights_safe" />
-              <span>저작권 안전 우선</span>
-            </label>
-            <label class="condition-chip">
-              <input id="auto-analyze" type="checkbox" />
-              <span>상위 5개 자동 파형 분석</span>
-            </label>
-          </fieldset>
-        </form>
-      </section>
-
-      <section class="status-row" aria-live="polite">
-        <div id="status">검색어를 입력하세요.</div>
-        <div id="provider-status" class="provider-status" aria-label="API 연결 상태"></div>
-        <button id="refresh-saved" type="button">저장 목록 새로고침</button>
-      </section>
-      <div id="condition-warning" class="condition-warning" aria-live="polite"></div>
-
-      <section class="content-grid">
-        <section class="results-panel">
-          <h2>검색 결과</h2>
-          <div id="results" class="sound-grid"></div>
-        </section>
-
-        <aside class="saved-panel">
-          <h2>저장한 후보</h2>
-          <div class="folder-create">
-            <input id="new-folder-name" type="text" placeholder="새 폴더명" />
-            <button id="create-folder" type="button">폴더 생성</button>
-          </div>
-          <div class="saved-controls">
-            <input id="saved-filter" type="search" placeholder="저장 후보 필터" />
-            <select id="saved-sort" aria-label="저장 후보 정렬">
-              <option value="recent">최근 저장순</option>
-              <option value="fit">적합도 높은 순</option>
-              <option value="score">점수 높은 순</option>
-              <option value="duration_asc">짧은 순</option>
-              <option value="duration_desc">긴 순</option>
-            </select>
-            <label>
-              <input id="saved-cc0" type="checkbox" />
-              <span>CC0만</span>
-            </label>
-            <label>
-              <input id="saved-good" type="checkbox" />
-              <span>좋음 평가만</span>
-            </label>
-          </div>
-          <div id="saved" class="saved-list"></div>
         </aside>
       </section>
     </main>

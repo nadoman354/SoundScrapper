@@ -1,8 +1,11 @@
 const form = document.querySelector("#search-form");
 const statusEl = document.querySelector("#status");
 const conditionWarningEl = document.querySelector("#condition-warning");
+const workspaceLayout = document.querySelector(".workspace-layout");
 const resultsEl = document.querySelector("#results");
 const savedEl = document.querySelector("#saved");
+const savedPanelToggle = document.querySelector("#saved-panel-toggle");
+const savedPanelCount = document.querySelector("#saved-panel-count");
 const providerStatusEl = document.querySelector("#provider-status");
 const refreshSavedButton = document.querySelector("#refresh-saved");
 const savedFilterInput = document.querySelector("#saved-filter");
@@ -27,6 +30,7 @@ const RECENT_SEARCHES_KEY = "soundscrapper.recentSearches";
 const FAVORITE_SEARCHES_KEY = "soundscrapper.favoriteSearches";
 const SAVED_FOLDER_STATE_KEY = "soundscrapper.savedFolderState";
 const SAVED_COLLAPSE_STATE_KEY = "soundscrapper.savedCollapseState";
+const SAVED_PANEL_COLLAPSED_KEY = "soundscrapper.savedPanelCollapsed";
 const WORKSPACE_ID_KEY = "soundscrapper.workspaceId";
 
 const LICENSE_LABELS = {
@@ -232,6 +236,26 @@ function writeSavedCollapseState(value) {
 
 function savedCollapseKey(savedId) {
   return `saved:${savedId}`;
+}
+
+function readSavedPanelCollapsed() {
+  return localStorage.getItem(SAVED_PANEL_COLLAPSED_KEY) === "true";
+}
+
+function writeSavedPanelCollapsed(collapsed) {
+  localStorage.setItem(SAVED_PANEL_COLLAPSED_KEY, String(collapsed));
+}
+
+function applySavedPanelCollapsed(collapsed) {
+  workspaceLayout.classList.toggle("is-saved-panel-collapsed", collapsed);
+  savedPanelToggle.setAttribute("aria-expanded", String(!collapsed));
+  const label = collapsed ? "저장 후보 패널 펼치기" : "저장 후보 패널 접기";
+  savedPanelToggle.setAttribute("aria-label", label);
+  savedPanelToggle.title = label;
+}
+
+function updateSavedPanelCount() {
+  savedPanelCount.textContent = String(savedSounds.length);
 }
 
 function setConditionWarning(message) {
@@ -1156,6 +1180,7 @@ function savedSorter(sortKey) {
 }
 
 function renderSaved(sounds = filteredSavedSounds()) {
+  updateSavedPanelCount();
   savedEl.replaceChildren();
   const groups = savedFolderGroups(sounds);
   if (groups.length === 0) {
@@ -2081,6 +2106,11 @@ function renderProviderStatus(providers) {
 
 form.addEventListener("submit", searchSounds);
 refreshSavedButton.addEventListener("click", loadSavedSounds);
+savedPanelToggle.addEventListener("click", () => {
+  const collapsed = !workspaceLayout.classList.contains("is-saved-panel-collapsed");
+  writeSavedPanelCollapsed(collapsed);
+  applySavedPanelCollapsed(collapsed);
+});
 savedFilterInput.addEventListener("input", () => renderSaved());
 savedSortSelect.addEventListener("change", () => renderSaved());
 savedCc0Input.addEventListener("change", () => renderSaved());
@@ -2108,6 +2138,7 @@ newFolderInput.addEventListener("keydown", (event) => {
   }
 });
 setupSearchModeConflicts();
+applySavedPanelCollapsed(readSavedPanelCollapsed());
 renderSearchMemory();
 loadProviderStatus();
 loadSavedSounds();
