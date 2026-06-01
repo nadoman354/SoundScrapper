@@ -18,6 +18,7 @@ const favoriteSearchButton = document.querySelector("#favorite-search");
 const soloLongAudioInput = document.querySelector("#solo-long-audio");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
+const headerAuthEl = document.querySelector("#header-auth");
 const template = document.querySelector("#sound-card-template");
 const helpTourStartButton = document.querySelector("#help-tour-start");
 const helpTourOverlay = document.querySelector("#help-tour-overlay");
@@ -540,16 +541,22 @@ async function loadFreesoundAuthStatus() {
 }
 
 function renderFreesoundAuthControl() {
-  providerStatusEl.querySelector("[data-freesound-auth-control]")?.remove();
+  document.querySelectorAll("[data-freesound-auth-control]").forEach((node) => node.remove());
+  const target = headerAuthEl || providerStatusEl;
+  if (!target) {
+    return;
+  }
   const button = document.createElement("button");
   button.type = "button";
+  button.className = "freesound-auth-button";
   button.dataset.freesoundAuthControl = "true";
   button.dataset.tooltip = freesoundAuthStatus.logged_in
     ? "Freesound 원본 다운로드 로그인을 해제합니다."
     : "Freesound에 로그인하면 Freesound 원본 파일을 받을 수 있습니다.";
+  button.classList.toggle("is-logged-in", Boolean(freesoundAuthStatus.logged_in));
   button.textContent = freesoundAuthStatus.logged_in
-    ? `Freesound 로그아웃${freesoundAuthStatus.username ? ` (${freesoundAuthStatus.username})` : ""}`
-    : "Freesound 로그인";
+    ? `Freesound 연결됨${freesoundAuthStatus.username ? ` · ${freesoundAuthStatus.username}` : ""}`
+    : "Freesound 원본 로그인";
   button.addEventListener("click", async () => {
     if (freesoundAuthStatus.logged_in) {
       await logoutFreesound();
@@ -557,7 +564,7 @@ function renderFreesoundAuthControl() {
     }
     await startFreesoundLogin();
   });
-  providerStatusEl.append(button);
+  target.append(button);
 }
 
 async function startFreesoundLogin() {

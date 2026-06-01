@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SoundScrapper</title>
-    <link rel="stylesheet" href="/static/style.css?v=help-tour-20260601-2" />
+    <link rel="stylesheet" href="/static/style.css?v=auth-header-20260601-1" />
   </head>
   <body>
     <main class="app-shell">
@@ -18,12 +18,15 @@
             <p>사운드 후보 탐색기</p>
           </div>
         </div>
-        <button
-          id="help-tour-start"
-          class="help-tour-start"
-          type="button"
-          data-tooltip="화면을 단계별로 이동하면서 주요 기능을 설명합니다."
-        >사용법 설명</button>
+        <div class="header-actions">
+          <div id="header-auth" class="header-auth" aria-label="Freesound 로그인"></div>
+          <button
+            id="help-tour-start"
+            class="help-tour-start"
+            type="button"
+            data-tooltip="화면을 단계별로 이동하면서 주요 기능을 설명합니다."
+          >사용법 설명</button>
+        </div>
       </header>
 
       <section class="workspace-layout">
@@ -376,6 +379,6 @@
       <p>Contact: <a href="mailto:soundscrapper.contact@gmail.com">soundscrapper.contact@gmail.com</a></p>
     </footer>
 
-    <script src="/static/app.js?v=help-tour-20260601-2" defer></script>
+    <script src="/static/app.js?v=auth-header-20260601-1" defer></script>
   </body>
 </html>

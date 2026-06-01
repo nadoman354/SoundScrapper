@@ -78,10 +78,50 @@ a {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 16px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.header-auth {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.freesound-auth-button {
+  min-height: 38px;
+  max-width: min(42vw, 300px);
+  overflow: hidden;
+  border: 1px solid #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  padding: 0 13px;
+  text-overflow: ellipsis;
+}
+
+.freesound-auth-button:hover {
+  background: #0b5f59;
+}
+
+.freesound-auth-button.is-logged-in {
+  border-color: #9fd3cc;
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.freesound-auth-button.is-logged-in:hover {
+  background: #d9f7ef;
 }
 
 .help-tour-start {
@@ -1939,6 +1979,23 @@ audio {
 }
 
 @media (max-width: 760px) {
+  .app-header {
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .header-auth {
+    flex: 1;
+  }
+
+  .freesound-auth-button {
+    max-width: 100%;
+  }
+
   .workspace-layout,
   .workspace-layout.is-saved-panel-collapsed {
     grid-template-columns: 1fr;
