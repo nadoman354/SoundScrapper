@@ -51,6 +51,22 @@ class ProviderStatusResponse(BaseModel):
     providers: list[ProviderStatus]
 
 
+class FreesoundAuthStatus(BaseModel):
+    configured: bool
+    logged_in: bool
+    username: str | None = None
+    expires_at: int | None = None
+    message: str = ""
+
+
+class FreesoundOAuthStartResponse(BaseModel):
+    authorize_url: str
+
+
+class FreesoundOAuthExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=500)
+
+
 class SearchRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=500)
     license: LicenseFilter = "commercial"

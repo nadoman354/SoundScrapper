@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SoundScrapper</title>
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v=help-tour-20260601-2" />
   </head>
   <body>
     <main class="app-shell">
@@ -18,14 +18,19 @@
             <p>사운드 후보 탐색기</p>
           </div>
         </div>
-        <button id="help-tour-start" class="help-tour-start" type="button">사용법 설명</button>
+        <button
+          id="help-tour-start"
+          class="help-tour-start"
+          type="button"
+          data-tooltip="화면을 단계별로 이동하면서 주요 기능을 설명합니다."
+        >사용법 설명</button>
       </header>
 
       <section class="workspace-layout">
         <div class="workspace-main">
           <section class="toolbar" aria-label="사운드 검색 조건">
             <form id="search-form" class="search-form">
-              <label class="prompt-field">
+              <label class="prompt-field" data-tooltip="찾고 싶은 사운드를 자연어로 입력합니다. 예: 짧고 묵직한 암흑 마법 폭발음">
                 <span>검색 프롬프트</span>
                 <input
                   id="prompt"
@@ -37,7 +42,11 @@
                 />
               </label>
               <div class="search-memory">
-                <button id="favorite-search" type="button">현재 검색어 즐겨찾기</button>
+                <button
+                  id="favorite-search"
+                  type="button"
+                  data-tooltip="현재 입력한 검색어를 즐겨찾기에 저장하거나 해제합니다."
+                >현재 검색어 즐겨찾기</button>
                 <div class="memory-row">
                   <span>최근</span>
                   <div id="recent-searches" class="memory-list"></div>
@@ -49,7 +58,7 @@
               </div>
 
               <div class="filters">
-                <label>
+                <label data-tooltip="상업 사용 우선, CC0만, 전체 라이선스 중 검색 범위를 고릅니다.">
                   <span>라이선스</span>
                   <select id="license" name="license">
                     <option value="commercial" selected>상업 사용 우선</option>
@@ -58,7 +67,7 @@
                   </select>
                 </label>
 
-                <label>
+                <label data-tooltip="Freesound, Jamendo, Openverse 중 검색할 출처를 고릅니다.">
                   <span>출처</span>
                   <select id="source-filter" name="source-filter">
                     <option value="all" selected>전체</option>
@@ -68,7 +77,7 @@
                   </select>
                 </label>
 
-                <label>
+                <label data-tooltip="너무 짧은 소리를 제외할 최소 길이입니다.">
                   <span>최소 길이</span>
                   <input
                     id="min-duration"
@@ -80,7 +89,7 @@
                   />
                 </label>
 
-                <label>
+                <label data-tooltip="너무 긴 소리를 제외할 최대 길이입니다.">
                   <span>최대 길이</span>
                   <input
                     id="max-duration"
@@ -92,7 +101,7 @@
                   />
                 </label>
 
-                <label>
+                <label data-tooltip="한 번에 가져올 후보 개수입니다.">
                   <span>후보 수</span>
                   <input
                     id="page-size"
@@ -105,33 +114,33 @@
                   />
                 </label>
 
-                <label class="toggle-field">
+                <label class="toggle-field" data-tooltip="게임에 쓰기 쉬운 짧고 깨끗한 후보를 우선합니다.">
                   <input id="game-ready" name="game-ready" type="checkbox" checked />
                   <span>게임용 우선</span>
                 </label>
 
-                <button type="submit">검색</button>
+                <button type="submit" data-tooltip="현재 조건으로 사운드 후보를 검색합니다.">검색</button>
               </div>
 
               <fieldset class="condition-toggles" aria-describedby="condition-warning">
                 <legend>자주 쓰는 조건</legend>
-                <label class="condition-chip">
+                <label class="condition-chip" data-tooltip="환경음과 배경 잡음이 적은 후보를 우선합니다.">
                   <input type="checkbox" data-search-mode="clean_source" />
                   <span>깨끗한 소스</span>
                 </label>
-                <label class="condition-chip">
+                <label class="condition-chip" data-tooltip="게임 SFX로 쓰기 좋은 짧은 원샷 사운드를 우선합니다.">
                   <input type="checkbox" data-search-mode="short_sfx" />
                   <span>짧은 원샷 SFX</span>
                 </label>
-                <label class="condition-chip">
+                <label class="condition-chip" data-tooltip="파형이 분리되어 잘라 쓰기 쉬운 후보를 우선합니다.">
                   <input type="checkbox" data-search-mode="easy_cut" />
                   <span>컷오프 쉬움</span>
                 </label>
-                <label class="condition-chip">
+                <label class="condition-chip" data-tooltip="반복 재생이나 BGM 후보로 쓸 수 있는 사운드를 우선합니다.">
                   <input type="checkbox" data-search-mode="loop_bgm" />
                   <span>루프/BGM 후보</span>
                 </label>
-                <label class="condition-chip">
+                <label class="condition-chip" data-tooltip="CC0와 출처 표기 가능 라이선스를 우선하고 위험한 라이선스는 감점합니다.">
                   <input type="checkbox" data-search-mode="rights_safe" />
                   <span>저작권 안전 우선</span>
                 </label>
@@ -146,6 +155,13 @@
                   />
                   <span>상위 5개 자동 파형 분석</span>
                 </label>
+                <label
+                  class="condition-chip"
+                  data-tooltip="10초 이상 긴 사운드를 재생할 때 다른 사운드를 자동으로 일시정지합니다."
+                >
+                  <input id="solo-long-audio" type="checkbox" checked />
+                  <span>10초 이상 단독 재생</span>
+                </label>
               </fieldset>
             </form>
           </section>
@@ -153,7 +169,7 @@
           <section class="status-row" aria-live="polite">
             <div id="status">검색어를 입력하세요.</div>
             <div id="provider-status" class="provider-status" aria-label="API 연결 상태"></div>
-            <button id="refresh-saved" type="button">저장 목록 새로고침</button>
+            <button id="refresh-saved" type="button" data-tooltip="저장 후보와 폴더 목록을 서버에서 다시 불러옵니다.">저장 목록 새로고침</button>
           </section>
           <div id="condition-warning" class="condition-warning" aria-live="polite"></div>
 
@@ -183,23 +199,23 @@
           <div id="saved-panel-body" class="saved-panel-body">
             <h2>저장한 후보</h2>
             <div class="folder-create">
-              <input id="new-folder-name" type="text" placeholder="새 폴더명" />
-              <button id="create-folder" type="button">폴더 생성</button>
+              <input id="new-folder-name" type="text" placeholder="새 폴더명" data-tooltip="새 저장 폴더 이름을 입력합니다." />
+              <button id="create-folder" type="button" data-tooltip="입력한 이름으로 저장 후보 폴더를 만듭니다.">폴더 생성</button>
             </div>
             <div class="saved-controls">
-              <input id="saved-filter" type="search" placeholder="저장 후보 필터" />
-              <select id="saved-sort" aria-label="저장 후보 정렬">
+              <input id="saved-filter" type="search" placeholder="저장 후보 필터" data-tooltip="저장한 후보를 제목, 메모, 폴더명으로 좁혀 봅니다." />
+              <select id="saved-sort" aria-label="저장 후보 정렬" data-tooltip="저장 후보 목록의 정렬 기준을 바꿉니다.">
                 <option value="recent">최근 저장순</option>
                 <option value="fit">적합도 높은 순</option>
                 <option value="score">점수 높은 순</option>
                 <option value="duration_asc">짧은 순</option>
                 <option value="duration_desc">긴 순</option>
               </select>
-              <label>
+              <label data-tooltip="저장 후보 중 CC0 라이선스만 표시합니다.">
                 <input id="saved-cc0" type="checkbox" />
                 <span>CC0만</span>
               </label>
-              <label>
+              <label data-tooltip="좋음 평가가 남아 있는 저장 후보만 표시합니다.">
                 <input id="saved-good" type="checkbox" />
                 <span>좋음 평가만</span>
               </label>
@@ -330,6 +346,25 @@
     </section>
     <div id="help-tooltip" class="help-tooltip" role="tooltip" hidden></div>
 
+    <div id="download-choice-modal" class="modal-backdrop" hidden>
+      <section
+        class="download-choice-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="download-choice-title"
+      >
+        <h2 id="download-choice-title">Freesound 로그인이 필요합니다</h2>
+        <p id="download-choice-description">
+          로그인하면 원본 품질로 다운로드할 수 있습니다. 로그인하지 않으면 현재는 미리듣기용 프리뷰 파일로 다운로드됩니다.
+        </p>
+        <div class="download-choice-actions">
+          <button id="download-choice-login" type="button">로그인하기</button>
+          <button id="download-choice-preview" type="button">프리뷰 다운로드</button>
+          <button id="download-choice-cancel" type="button">취소</button>
+        </div>
+      </section>
+    </div>
+
     <footer class="site-footer">
       <div>
         <strong>Data sources</strong>
@@ -341,6 +376,6 @@
       <p>Contact: <a href="mailto:soundscrapper.contact@gmail.com">soundscrapper.contact@gmail.com</a></p>
     </footer>
 
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=help-tour-20260601-2" defer></script>
   </body>
 </html>

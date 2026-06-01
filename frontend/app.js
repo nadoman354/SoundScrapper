@@ -15,6 +15,7 @@ const savedGoodInput = document.querySelector("#saved-good");
 const newFolderInput = document.querySelector("#new-folder-name");
 const createFolderButton = document.querySelector("#create-folder");
 const favoriteSearchButton = document.querySelector("#favorite-search");
+const soloLongAudioInput = document.querySelector("#solo-long-audio");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
 const template = document.querySelector("#sound-card-template");
@@ -28,10 +29,19 @@ const helpTourPrevButton = document.querySelector("#help-tour-prev");
 const helpTourNextButton = document.querySelector("#help-tour-next");
 const helpTourCloseButton = document.querySelector("#help-tour-close");
 const helpTooltip = document.querySelector("#help-tooltip");
+const downloadChoiceModal = document.querySelector("#download-choice-modal");
+const downloadChoiceTitle = document.querySelector("#download-choice-title");
+const downloadChoiceDescription = document.querySelector("#download-choice-description");
+const downloadChoiceLoginButton = document.querySelector("#download-choice-login");
+const downloadChoicePreviewButton = document.querySelector("#download-choice-preview");
+const downloadChoiceCancelButton = document.querySelector("#download-choice-cancel");
 
 let lastResults = [];
 let savedSounds = [];
 let savedFolders = [];
+let freesoundAuthStatus = { configured: false, logged_in: false };
+let pendingDownloadChoice = null;
+let helpDemoSnapshot = null;
 let audioContext;
 const waveformCache = new Map();
 const feedbackSelections = new Map();
@@ -95,6 +105,110 @@ const SEARCH_MODE_CONFLICTS = {
   short_sfx: ["loop_bgm"],
   loop_bgm: ["short_sfx"],
 };
+
+const HELP_DEMO_RESULTS = [
+  {
+    id: 910001,
+    source_provider: "freesound",
+    source_id: "910001",
+    name: "Demo Sword Clash",
+    username: "SoundScrapper Demo",
+    license: "Creative Commons 0",
+    duration: 0.52,
+    tags: ["sword", "slash", "game", "short"],
+    preview_url: "https://cdn.freesound.org/previews/1/1_1-hq.mp3",
+    download_url: "https://cdn.freesound.org/previews/1/1_1-hq.mp3",
+    download_allowed: true,
+    source_url: "https://freesound.org/s/910001/",
+    url: "https://freesound.org/s/910001/",
+    description: "도움말용 짧은 검격 효과음 예시입니다.",
+    score: 100,
+    score_reasons: ["도움말 데모", "짧은 SFX", "컷오프 쉬움"],
+  },
+  {
+    id: 910002,
+    source_provider: "jamendo",
+    source_id: "demo-loop",
+    name: "Demo Menu Loop",
+    username: "SoundScrapper Demo",
+    license: "CC BY",
+    duration: 18.4,
+    tags: ["loop", "bgm", "menu", "calm"],
+    preview_url: "https://prod-1.storage.jamendo.com/previews/1.mp3",
+    download_url: "https://prod-1.storage.jamendo.com/download/track/1/mp32/",
+    download_allowed: true,
+    source_url: "https://www.jamendo.com/track/demo-loop",
+    url: "https://www.jamendo.com/track/demo-loop",
+    description: "도움말용 루프/BGM 후보 예시입니다.",
+    score: 92,
+    score_reasons: ["도움말 데모", "루프/BGM 후보"],
+  },
+];
+
+const HELP_DEMO_ANALYSES = {
+  910001: {
+    id: 910001,
+    preview_url: "https://cdn.freesound.org/previews/1/1_1-hq.mp3",
+    waveform: [0.03, 0.12, 0.86, 0.62, 0.18, 0.04, 0.52, 0.77, 0.2, 0.05],
+    duration: 0.52,
+    rms: 0.22,
+    peak: 0.82,
+    leading_silence_seconds: 0.03,
+    low_ratio: 0.34,
+    mid_ratio: 0.45,
+    high_ratio: 0.21,
+    spectral_centroid_hz: 2200,
+    heaviness_score: 62,
+    sharpness_score: 51,
+    emptiness_score: 9,
+  },
+  910002: {
+    id: 910002,
+    preview_url: "https://prod-1.storage.jamendo.com/previews/1.mp3",
+    waveform: [0.25, 0.31, 0.28, 0.36, 0.3, 0.34, 0.27, 0.35, 0.29, 0.33],
+    duration: 18.4,
+    rms: 0.18,
+    peak: 0.55,
+    leading_silence_seconds: 0.01,
+    low_ratio: 0.42,
+    mid_ratio: 0.39,
+    high_ratio: 0.19,
+    spectral_centroid_hz: 1600,
+    heaviness_score: 58,
+    sharpness_score: 34,
+    emptiness_score: 1,
+  },
+};
+
+const HELP_DEMO_FOLDERS = [
+  { folder_id: 9101, name: "UI", sort_order: 0, sound_count: 1 },
+  { folder_id: 9102, name: "BGM 후보", sort_order: 1, sound_count: 1 },
+];
+
+const HELP_DEMO_SAVED = [
+  {
+    saved_id: 920001,
+    saved_at: "demo",
+    ...HELP_DEMO_RESULTS[0],
+    feedback_types: ["good", "asset_ready"],
+    folder: "UI",
+    fit_rating: 5,
+    note: "사용할 장면: 검 공격. 앞 무음이 거의 없어 바로 자르기 좋음.",
+    labels: [],
+    download_filename: "UI_1",
+  },
+  {
+    saved_id: 920002,
+    saved_at: "demo",
+    ...HELP_DEMO_RESULTS[1],
+    feedback_types: ["good", "loop_good"],
+    folder: "BGM 후보",
+    fit_rating: 4,
+    note: "메뉴 화면 루프 후보. 원본 라이선스 재확인 필요.",
+    labels: [],
+    download_filename: "BGM_1",
+  },
+];
 
 const HELP_TOUR_STEPS = [
   {
@@ -416,9 +530,109 @@ function workspaceId() {
   return value;
 }
 
+async function loadFreesoundAuthStatus() {
+  try {
+    freesoundAuthStatus = await apiFetch("/api/freesound/auth-status");
+  } catch {
+    freesoundAuthStatus = { configured: false, logged_in: false };
+  }
+  renderFreesoundAuthControl();
+}
+
+function renderFreesoundAuthControl() {
+  providerStatusEl.querySelector("[data-freesound-auth-control]")?.remove();
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.freesoundAuthControl = "true";
+  button.dataset.tooltip = freesoundAuthStatus.logged_in
+    ? "Freesound 원본 다운로드 로그인을 해제합니다."
+    : "Freesound에 로그인하면 Freesound 원본 파일을 받을 수 있습니다.";
+  button.textContent = freesoundAuthStatus.logged_in
+    ? `Freesound 로그아웃${freesoundAuthStatus.username ? ` (${freesoundAuthStatus.username})` : ""}`
+    : "Freesound 로그인";
+  button.addEventListener("click", async () => {
+    if (freesoundAuthStatus.logged_in) {
+      await logoutFreesound();
+      return;
+    }
+    await startFreesoundLogin();
+  });
+  providerStatusEl.append(button);
+}
+
+async function startFreesoundLogin() {
+  try {
+    const data = await apiFetch("/api/freesound/oauth/start");
+    window.location.href = data.authorize_url;
+  } catch (error) {
+    setStatus(`Freesound 로그인 시작 실패: ${translateError(error.message)}`);
+  }
+}
+
+async function logoutFreesound() {
+  try {
+    await apiFetch("/api/freesound/logout", { method: "POST" });
+    freesoundAuthStatus = { configured: true, logged_in: false };
+    renderFreesoundAuthControl();
+    setStatus("Freesound 로그아웃 완료");
+  } catch (error) {
+    setStatus(`Freesound 로그아웃 실패: ${translateError(error.message)}`);
+  }
+}
+
+function handleFreesoundLoginRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const result = params.get("freesound_login");
+  if (!result) {
+    return;
+  }
+  const cleanUrl = `${window.location.pathname}${window.location.hash || ""}`;
+  window.history.replaceState({}, "", cleanUrl);
+  if (result === "success") {
+    setStatus("Freesound 로그인 완료");
+  } else if (result === "denied") {
+    setStatus("Freesound 로그인이 취소되었습니다.");
+  } else {
+    setStatus("Freesound 로그인 처리에 실패했습니다.");
+  }
+}
+
+function openDownloadChoiceModal(choice) {
+  pendingDownloadChoice = choice;
+  const isFolder = choice.type === "folder";
+  downloadChoiceTitle.textContent = "Freesound 로그인이 필요합니다";
+  downloadChoiceDescription.textContent = isFolder
+    ? "이 폴더에는 Freesound 사운드가 있습니다. 로그인하면 Freesound 항목은 원본 품질로 받을 수 있고, 로그인하지 않으면 프리뷰 파일로 ZIP을 만듭니다."
+    : "로그인하면 원본 품질로 다운로드할 수 있습니다. 로그인하지 않으면 현재는 미리듣기용 프리뷰 파일로 다운로드됩니다.";
+  downloadChoicePreviewButton.textContent = isFolder ? "프리뷰로 계속" : "프리뷰 다운로드";
+  downloadChoiceModal.hidden = false;
+  downloadChoiceLoginButton.focus({ preventScroll: true });
+}
+
+function closeDownloadChoiceModal() {
+  pendingDownloadChoice = null;
+  downloadChoiceModal.hidden = true;
+}
+
+async function confirmPreviewDownloadChoice() {
+  const choice = pendingDownloadChoice;
+  closeDownloadChoiceModal();
+  if (!choice) {
+    return;
+  }
+  if (choice.type === "folder") {
+    await triggerFolderDownload(choice.group, { allowPreviewFallback: true });
+    return;
+  }
+  triggerPreviewDownload(choice.sound, choice.nameOverride, choice.options || {});
+}
+
 function translateError(message) {
   if (message.includes("FREESOUND_API_KEY")) {
     return ".env에 Freesound API 키를 설정해야 검색할 수 있습니다.";
+  }
+  if (message.includes("FREESOUND_CLIENT_ID") || message.includes("FREESOUND_CLIENT_SECRET")) {
+    return ".env에 Freesound OAuth Client ID/Secret을 설정해야 원본 다운로드를 사용할 수 있습니다.";
   }
   if (message.includes("Failed to fetch")) {
     return "서버에 연결할 수 없습니다.";
@@ -513,12 +727,27 @@ function previewAudioUrl(sound) {
   return `/api/preview-audio/${sound.id}?preview_url=${encodeURIComponent(sound.preview_url)}`;
 }
 
-function downloadPreviewUrl(sound, nameOverride = null) {
+function freesoundOriginalDownloadUrl(sound, nameOverride = null) {
+  const params = new URLSearchParams({
+    workspace_id: workspaceId(),
+    name: nameOverride || sound.name || "sound",
+  });
+  return `/api/freesound/original-download/${encodeURIComponent(sound.source_id || sound.id)}?${params.toString()}`;
+}
+
+function downloadPreviewUrl(sound, nameOverride = null, options = {}) {
   const params = new URLSearchParams({
     preview_url: sound.download_url || sound.preview_url || "",
     name: nameOverride || sound.name || "sound",
   });
+  if (options.preserveNameExtension) {
+    params.set("preserve_name_extension", "true");
+  }
   return `/api/download-preview/${sound.id}?${params.toString()}`;
+}
+
+function isFreesoundSound(sound) {
+  return (sound.source_provider || "freesound") === "freesound";
 }
 
 function originalSoundUrl(sound) {
@@ -527,6 +756,43 @@ function originalSoundUrl(sound) {
 
 function downloadDisplayName(sound, fallbackName = null) {
   return (sound.download_filename || "").trim() || fallbackName || sound.name || "sound";
+}
+
+function originalDownloadName(sound) {
+  const name = (sound.name || "").trim();
+  if (name) {
+    return name;
+  }
+  return filenameFromUrl(sound.download_url) || filenameFromUrl(sound.preview_url) || "sound";
+}
+
+function filenameFromUrl(url) {
+  if (!url) {
+    return "";
+  }
+  try {
+    const path = new URL(url).pathname;
+    return decodeURIComponent(path.split("/").filter(Boolean).pop() || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function setupExclusivePlayback(audio, sound) {
+  audio.addEventListener("play", () => {
+    if (!shouldSoloLongAudio(sound)) {
+      return;
+    }
+    for (const otherAudio of document.querySelectorAll("audio")) {
+      if (otherAudio !== audio && !otherAudio.paused) {
+        otherAudio.pause();
+      }
+    }
+  });
+}
+
+function shouldSoloLongAudio(sound) {
+  return Boolean(soloLongAudioInput?.checked && Number(sound.duration || 0) >= 10);
 }
 
 function renderTags(container, tags, limit = 5) {
@@ -654,6 +920,7 @@ function renderSoundCard(sound) {
   const audio = node.querySelector("audio");
   if (sound.preview_url) {
     audio.src = sound.preview_url;
+    setupExclusivePlayback(audio, sound);
   } else {
     audio.remove();
   }
@@ -718,8 +985,13 @@ function renderSoundCard(sound) {
     downloadButton.disabled = true;
     downloadButton.textContent = "다운로드 없음";
   } else {
+    downloadButton.textContent = isFreesoundSound(sound)
+      ? freesoundAuthStatus.logged_in
+        ? "원본 다운로드"
+        : "프리뷰 다운로드"
+      : "다운로드";
     downloadButton.addEventListener("click", () => {
-      triggerDownload(sound);
+      requestDownload(sound, originalDownloadName(sound), { preserveNameExtension: true });
     });
   }
 
@@ -869,14 +1141,40 @@ function renderAttributionNote(container, sound) {
   }
 }
 
-function triggerDownload(sound, nameOverride = null) {
+function triggerPreviewDownload(sound, nameOverride = null, options = {}) {
   const link = document.createElement("a");
-  link.href = downloadPreviewUrl(sound, nameOverride);
+  link.href = downloadPreviewUrl(sound, nameOverride, options);
   link.download = "";
   document.body.append(link);
   link.click();
   link.remove();
-  setStatus(`다운로드 시작: ${nameOverride || sound.name} · 라이선스 확인은 원본 페이지 기준입니다.`);
+  setStatus(`프리뷰 다운로드 시작: ${nameOverride || sound.name} · 라이선스 확인은 원본 페이지 기준입니다.`);
+}
+
+function triggerOriginalDownload(sound, nameOverride = null) {
+  const link = document.createElement("a");
+  link.href = freesoundOriginalDownloadUrl(sound, nameOverride);
+  link.download = "";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setStatus(`Freesound 원본 다운로드 시작: ${nameOverride || sound.name}`);
+}
+
+function requestDownload(sound, nameOverride = null, options = {}) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 실제 다운로드를 실행하지 않습니다.");
+    return;
+  }
+  if (isFreesoundSound(sound)) {
+    if (freesoundAuthStatus.logged_in) {
+      triggerOriginalDownload(sound, nameOverride);
+      return;
+    }
+    openDownloadChoiceModal({ type: "sound", sound, nameOverride, options });
+    return;
+  }
+  triggerPreviewDownload(sound, nameOverride, options);
 }
 
 async function hydrateStoredAnalysis(sound, node) {
@@ -1391,6 +1689,14 @@ function renderSavedFolderSummary(group) {
   downloadButton.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (isHelpDemoActive()) {
+      setStatus("도움말 데모에서는 실제 다운로드를 실행하지 않습니다.");
+      return;
+    }
+    if (group.sounds.some((sound) => isFreesoundSound(sound)) && !freesoundAuthStatus.logged_in) {
+      openDownloadChoiceModal({ type: "folder", group });
+      return;
+    }
     try {
       await triggerFolderDownload(group);
     } catch (error) {
@@ -1487,6 +1793,7 @@ function renderSavedItem(sound, defaultDownloadName) {
     audio.controls = true;
     audio.preload = "none";
     audio.src = sound.preview_url;
+    setupExclusivePlayback(audio, sound);
     audioWrap.append(audio);
   } else {
     audioWrap.append(emptyState("미리듣기 없음"));
@@ -1521,12 +1828,18 @@ function renderSavedItemActions(sound, defaultDownloadName, item) {
   });
   actions.append(collapseButton);
 
-  const downloadButton = iconButton("다운로드", "download");
+  const downloadLabel =
+    isFreesoundSound(sound) && freesoundAuthStatus.logged_in
+      ? "원본 다운로드"
+      : isFreesoundSound(sound)
+        ? "프리뷰 다운로드"
+        : "다운로드";
+  const downloadButton = iconButton(downloadLabel, "download");
   if (!sound.download_allowed || !(sound.download_url || sound.preview_url)) {
     downloadButton.disabled = true;
   } else {
     downloadButton.addEventListener("click", () =>
-      triggerDownload(sound, downloadDisplayName(sound, defaultDownloadName))
+      requestDownload(sound, downloadDisplayName(sound, defaultDownloadName))
     );
   }
   actions.append(downloadButton);
@@ -1719,6 +2032,10 @@ async function saveSound(sound) {
 }
 
 async function saveSoundToFolder(sound, folderName) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 실제 저장을 변경하지 않습니다.");
+    return null;
+  }
   let saved = await saveSound(sound);
   const normalizedFolder = (folderName || "").trim();
   if ((saved.folder || "") !== normalizedFolder) {
@@ -1736,6 +2053,10 @@ async function saveSoundToFolder(sound, folderName) {
 }
 
 async function removeSavedBySound(sound) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 실제 저장을 변경하지 않습니다.");
+    return;
+  }
   const saved = savedSounds.find((item) => soundIdentity(item) === soundIdentity(sound));
   if (!saved) {
     return;
@@ -1748,6 +2069,10 @@ async function removeSavedBySound(sound) {
 }
 
 async function updateSavedMetadata(savedId, update) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 실제 저장 후보를 수정하지 않습니다.");
+    return null;
+  }
   try {
     const saved = await apiFetch(`/api/saved-sounds/${savedId}`, {
       method: "PATCH",
@@ -1774,6 +2099,10 @@ async function deleteSavedSound(savedId) {
 }
 
 async function deleteSavedItem(sound) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 실제 저장 후보를 삭제하지 않습니다.");
+    return;
+  }
   try {
     await deleteSavedSound(sound.saved_id);
     savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== sound.saved_id);
@@ -1806,9 +2135,11 @@ async function deleteSavedFolder(folderId) {
   });
 }
 
-async function triggerFolderDownload(group) {
+async function triggerFolderDownload(group, options = {}) {
   const params = new URLSearchParams({
     saved_ids: group.sounds.map((sound) => String(sound.saved_id)).join(","),
+    prefer_original: "true",
+    allow_preview_fallback: options.allowPreviewFallback === false ? "false" : "true",
   });
   const response = await fetch(
     `/api/saved-folders/${group.folder_id || 0}/download?${params.toString()}`,
@@ -2194,6 +2525,7 @@ function renderProviderStatus(providers) {
     item.textContent = `${sourceLabel(provider.provider)} ${statusLabel}`;
     providerStatusEl.append(item);
   }
+  renderFreesoundAuthControl();
 }
 
 function clampNumber(value, min, max) {
@@ -2253,6 +2585,7 @@ function showHelpTourStep(index) {
   helpTourDescriptionEl.textContent = fallback && step.fallbackDescription ? step.fallbackDescription : step.description;
   helpTourPrevButton.disabled = helpTourIndex === 0;
   helpTourNextButton.textContent = helpTourIndex === HELP_TOUR_STEPS.length - 1 ? "완료" : "다음";
+  positionHelpTourPopover(helpTourTarget);
 
   window.setTimeout(() => {
     positionHelpTourPopover(helpTourTarget);
@@ -2284,6 +2617,21 @@ function positionHelpTourPopover(target) {
 }
 
 function initializeHelpTour() {
+  const requiredElements = [
+    helpTourStartButton,
+    helpTourOverlay,
+    helpTourPopover,
+    helpTourStepEl,
+    helpTourTitleEl,
+    helpTourDescriptionEl,
+    helpTourPrevButton,
+    helpTourNextButton,
+    helpTourCloseButton,
+  ];
+  if (requiredElements.some((element) => !element)) {
+    return;
+  }
+
   helpTourStartButton.addEventListener("click", startHelpTour);
   helpTourOverlay.addEventListener("click", closeHelpTour);
   helpTourCloseButton.addEventListener("click", closeHelpTour);
@@ -2304,7 +2652,7 @@ function initializeHelpTour() {
     if (helpTourTarget && !helpTourPopover.hidden) {
       positionHelpTourPopover(helpTourTarget);
     }
-    if (tooltipTarget && !helpTooltip.hidden) {
+    if (tooltipTarget && helpTooltip && !helpTooltip.hidden) {
       positionTooltip(tooltipTarget);
     }
   });
@@ -2314,7 +2662,7 @@ function initializeHelpTour() {
       if (helpTourTarget && !helpTourPopover.hidden) {
         positionHelpTourPopover(helpTourTarget);
       }
-      if (tooltipTarget && !helpTooltip.hidden) {
+      if (tooltipTarget && helpTooltip && !helpTooltip.hidden) {
         requestTooltipPosition(tooltipTarget);
       }
     },
@@ -2323,16 +2671,17 @@ function initializeHelpTour() {
 }
 
 function queueTooltip(target) {
-  if (!target?.dataset.tooltip || target.disabled || !helpTourPopover.hidden) {
+  const tourOpen = helpTourPopover && !helpTourPopover.hidden;
+  if (!helpTooltip || !target?.dataset.tooltip || target.disabled || tourOpen) {
     return;
   }
   window.clearTimeout(tooltipTimer);
-  tooltipTimer = window.setTimeout(() => showTooltip(target), 500);
+  tooltipTimer = window.setTimeout(() => showTooltip(target), 350);
 }
 
 function showTooltip(target) {
   const text = target.dataset.tooltip;
-  if (!text || target.disabled) {
+  if (!helpTooltip || !text || target.disabled) {
     return;
   }
   tooltipTarget = target;
@@ -2345,11 +2694,14 @@ function hideTooltip() {
   window.clearTimeout(tooltipTimer);
   tooltipTimer = null;
   tooltipTarget = null;
+  if (!helpTooltip) {
+    return;
+  }
   helpTooltip.hidden = true;
 }
 
 function requestTooltipPosition(target) {
-  if (tooltipRaf) {
+  if (!helpTooltip || tooltipRaf) {
     return;
   }
   tooltipRaf = window.requestAnimationFrame(() => {
@@ -2359,7 +2711,7 @@ function requestTooltipPosition(target) {
 }
 
 function positionTooltip(target) {
-  if (helpTooltip.hidden || !target) {
+  if (!helpTooltip || helpTooltip.hidden || !target) {
     return;
   }
   const margin = 10;
@@ -2379,6 +2731,10 @@ function positionTooltip(target) {
 }
 
 function initializeTooltips() {
+  if (!helpTooltip) {
+    return;
+  }
+
   document.addEventListener("pointerover", (event) => {
     const target = event.target.closest("[data-tooltip]");
     if (target) {

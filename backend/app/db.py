@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 from backend.app.schemas import (
@@ -15,6 +16,15 @@ from backend.app.schemas import (
 )
 
 DEFAULT_WORKSPACE_ID = "local"
+
+
+@dataclass(frozen=True)
+class FreesoundOAuthToken:
+    workspace_id: str
+    access_token: str
+    refresh_token: str
+    expires_at: int
+    username: str = ""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS saved_sounds (
@@ -84,6 +94,15 @@ CREATE TABLE IF NOT EXISTS sound_feedback (
     source_id TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS freesound_oauth_tokens (
+    workspace_id TEXT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    username TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -95,6 +114,7 @@ def initialize_db(database_path: Path) -> None:
         _ensure_saved_source_columns(connection)
         _ensure_saved_metadata_columns(connection)
         _ensure_workspace_columns(connection)
+        _ensure_freesound_oauth_table(connection)
         _rebuild_saved_sounds_if_needed(connection)
         _rebuild_saved_folders_if_needed(connection)
         _ensure_workspace_indexes(connection)
@@ -431,6 +451,73 @@ def delete_saved_folder(
         return cursor.rowcount > 0
 
 
+def save_freesound_oauth_token(
+    database_path: Path,
+    token: FreesoundOAuthToken,
+) -> FreesoundOAuthToken:
+    initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(token.workspace_id)
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute(
+            """
+            INSERT INTO freesound_oauth_tokens (
+                workspace_id, access_token, refresh_token, expires_at, username
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id) DO UPDATE SET
+                access_token = excluded.access_token,
+                refresh_token = excluded.refresh_token,
+                expires_at = excluded.expires_at,
+                username = excluded.username,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                workspace_id,
+                token.access_token,
+                token.refresh_token,
+                int(token.expires_at),
+                token.username or "",
+            ),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM freesound_oauth_tokens WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+    return _row_to_freesound_token(row)
+
+
+def get_freesound_oauth_token(
+    database_path: Path,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> FreesoundOAuthToken | None:
+    initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM freesound_oauth_tokens WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+    return _row_to_freesound_token(row) if row else None
+
+
+def delete_freesound_oauth_token(
+    database_path: Path,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> bool:
+    initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
+    with sqlite3.connect(database_path) as connection:
+        cursor = connection.execute(
+            "DELETE FROM freesound_oauth_tokens WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
 def save_analysis(database_path: Path, analysis: SoundAnalysis) -> SoundAnalysis:
     initialize_db(database_path)
     waveform = json.dumps(analysis.waveform)
@@ -680,6 +767,16 @@ def _row_to_saved_folder(row: sqlite3.Row) -> SavedFolder:
         sort_order=row["sort_order"],
         sound_count=row["sound_count"] if "sound_count" in row.keys() else 0,
         created_at=row["created_at"],
+    )
+
+
+def _row_to_freesound_token(row: sqlite3.Row) -> FreesoundOAuthToken:
+    return FreesoundOAuthToken(
+        workspace_id=row["workspace_id"],
+        access_token=row["access_token"],
+        refresh_token=row["refresh_token"],
+        expires_at=int(row["expires_at"]),
+        username=row["username"] if "username" in row.keys() else "",
     )
 
 
@@ -951,6 +1048,21 @@ def _ensure_saved_folder_table(connection: sqlite3.Connection) -> None:
             name TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def _ensure_freesound_oauth_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS freesound_oauth_tokens (
+            workspace_id TEXT PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0,
+            username TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )

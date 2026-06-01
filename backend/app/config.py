@@ -29,6 +29,8 @@ class Settings:
     frontend_dir: Path
     preview_cache_dir: Path
     freesound_base_url: str = "https://freesound.org"
+    freesound_client_id: str | None = None
+    freesound_client_secret: str | None = None
     openverse_client_id: str | None = None
     openverse_client_secret: str | None = None
     openverse_base_url: str = "https://api.openverse.org"
@@ -65,6 +67,8 @@ def get_settings() -> Settings:
         preview_cache_dir=preview_cache_dir,
         freesound_base_url=env_value("FREESOUND_BASE_URL", "https://freesound.org")
         or "https://freesound.org",
+        freesound_client_id=env_value("FREESOUND_CLIENT_ID"),
+        freesound_client_secret=env_value("FREESOUND_CLIENT_SECRET"),
         openverse_client_id=env_value("OPENVERSE_CLIENT_ID"),
         openverse_client_secret=env_value("OPENVERSE_CLIENT_SECRET"),
         openverse_base_url=_normalize_openverse_base_url(

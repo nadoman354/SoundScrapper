@@ -629,6 +629,18 @@ def test_download_preview_returns_attachment(tmp_path: Path, monkeypatch) -> Non
     assert "attachment" in response.headers["content-disposition"]
     assert "Big%20Boom.mp3" in response.headers["content-disposition"]
 
+    original_name_response = client.get(
+        "/api/download-preview/42",
+        params={
+            "preview_url": "https://cdn.freesound.org/previews/42.mp3",
+            "name": "Original Slash.wav",
+            "preserve_name_extension": "true",
+        },
+    )
+
+    assert original_name_response.status_code == 200
+    assert "Original%20Slash.wav" in original_name_response.headers["content-disposition"]
+
 
 def test_saved_folder_download_returns_zip_with_ordered_names(
     tmp_path: Path,
