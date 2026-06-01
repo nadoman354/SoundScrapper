@@ -32,7 +32,7 @@ from backend.app.freesound_oauth import FreesoundOriginalDownload, FreesoundToke
 from backend.app.jamendo_client import JamendoClient
 from backend.app.main import _dedupe_results, _make_freesound_oauth_state, create_app
 from backend.app.openverse_client import OpenverseClient
-from backend.app.prompt_parser import parse_prompt
+from backend.app.prompt_parser import build_search_suggestions, parse_prompt
 from backend.app.preview_cache import cache_preview_audio, is_allowed_preview_url
 from backend.app.ranker import score_sound
 from backend.app.schemas import FeedbackRequest, SavedSoundUpdate, SoundAnalysis, SoundSearchResult
@@ -46,6 +46,68 @@ def test_parse_prompt_expands_korean_keywords() -> None:
     assert "dark" in parsed.query
     assert "heavy" in parsed.query
     assert "sfx" in parsed.query
+
+
+def test_parse_prompt_understands_korean_sfx_context() -> None:
+    parsed = parse_prompt("묵직한 검 휘두르는 소리 잡음 없이")
+
+    assert "sword" in parsed.query
+    assert "slash" in parsed.query
+    assert "whoosh" in parsed.query
+    assert "heavy" in parsed.query
+    assert "clean" in parsed.query
+    assert "검격" in parsed.interpreted_concepts
+    assert "묵직함" in parsed.interpreted_concepts
+    assert "잡음/환경음 제외" in parsed.negative_concepts
+    assert "noise" in parsed.negative_terms
+
+
+def test_parse_prompt_understands_bgm_loop_context() -> None:
+    parsed = parse_prompt("잔잔한 루프 브금")
+
+    assert "calm" in parsed.query
+    assert "loop" in parsed.query
+    assert "bgm" in parsed.query
+    assert "music" in parsed.query
+    assert "잔잔함" in parsed.interpreted_concepts
+    assert "루프" in parsed.interpreted_concepts
+    assert "BGM" in parsed.interpreted_concepts
+    assert "bgm" in parsed.intent_flags
+    assert "loop" in parsed.intent_flags
+
+
+def test_parse_prompt_handles_negative_sharp_context() -> None:
+    parsed = parse_prompt("날카롭지 않은 UI 클릭")
+
+    assert "ui" in parsed.query
+    assert "click" in parsed.query
+    assert "button" in parsed.query
+    assert "sharp" not in parsed.include_terms
+    assert "metallic" not in parsed.include_terms
+    assert "날카로움" not in parsed.interpreted_concepts
+    assert "날카로움 제외" in parsed.negative_concepts
+
+
+def test_build_search_suggestions_for_korean_sfx_context() -> None:
+    suggestions = build_search_suggestions("묵직한 검 휘두르는 소리 잡음 없이")
+    prompts = [suggestion.prompt for suggestion in suggestions]
+
+    assert "heavy sword slash" in prompts
+    assert "sword slash" in prompts
+    assert all(suggestion.reason for suggestion in suggestions)
+
+
+def test_build_search_suggestions_stays_quiet_for_unclear_prompt() -> None:
+    assert build_search_suggestions("테스트") == ()
+    assert build_search_suggestions("") == ()
+
+
+def test_build_search_suggestions_for_bgm_loop_context() -> None:
+    suggestions = build_search_suggestions("잔잔한 루프 브금")
+    prompts = [suggestion.prompt for suggestion in suggestions]
+
+    assert "seamless loop bgm" in prompts
+    assert any("background music" in prompt or "loop" in prompt for prompt in prompts)
 
 
 def test_ranker_prefers_matching_cc0_sound() -> None:
@@ -64,6 +126,61 @@ def test_ranker_prefers_matching_cc0_sound() -> None:
     assert scored.score > 80
     assert any("CC0" in reason for reason in scored.score_reasons)
     assert any("검색어 일치" in reason for reason in scored.score_reasons)
+
+
+def test_ranker_weights_tag_matches_above_description_matches() -> None:
+    parsed = parse_prompt("검 베기")
+    tagged = SoundSearchResult(
+        id=101,
+        name="Useful sound",
+        license="Attribution",
+        duration=0.8,
+        tags=["sword", "slash", "blade"],
+        preview_url="https://example.com/tag.mp3",
+    )
+    described = SoundSearchResult(
+        id=102,
+        name="Useful sound",
+        license="Attribution",
+        duration=0.8,
+        tags=[],
+        description="sword slash blade",
+        preview_url="https://example.com/desc.mp3",
+    )
+
+    tagged_scored = score_sound(tagged, parsed, min_duration=0.1, max_duration=3.0)
+    described_scored = score_sound(described, parsed, min_duration=0.1, max_duration=3.0)
+
+    assert tagged_scored.score > described_scored.score
+    assert any("태그:" in reason for reason in tagged_scored.score_reasons)
+    assert any("설명:" in reason for reason in described_scored.score_reasons)
+
+
+def test_ranker_penalizes_negative_korean_context_without_hiding_result() -> None:
+    parsed = parse_prompt("잡음 없이 버튼 클릭")
+    clean = SoundSearchResult(
+        id=103,
+        name="Clean UI Click",
+        license="Creative Commons 0",
+        duration=0.2,
+        tags=["clean", "ui", "click"],
+        preview_url="https://example.com/clean.mp3",
+    )
+    noisy = SoundSearchResult(
+        id=104,
+        name="Noisy street button click",
+        license="Creative Commons 0",
+        duration=0.2,
+        tags=["noise", "ambience", "ui", "click"],
+        preview_url="https://example.com/noisy.mp3",
+    )
+
+    clean_scored = score_sound(clean, parsed, min_duration=0.1, max_duration=3.0)
+    noisy_scored = score_sound(noisy, parsed, min_duration=0.1, max_duration=3.0)
+
+    assert clean_scored.score > noisy_scored.score
+    assert noisy_scored.score > 0
+    assert any("부정 조건" in reason for reason in noisy_scored.score_reasons)
 
 
 def test_ranker_game_ready_prefers_clean_short_sfx() -> None:
@@ -237,6 +354,7 @@ def test_db_save_and_list_round_trip(tmp_path: Path) -> None:
         duration=0.3,
         tags=["button", "click"],
         score=72,
+        download_count=123,
     )
 
     saved = save_sound(database_path, sound)
@@ -247,6 +365,7 @@ def test_db_save_and_list_round_trip(tmp_path: Path) -> None:
     assert listed[0].tags == ["button", "click"]
     assert listed[0].source_provider == "freesound"
     assert listed[0].source_id == "10"
+    assert listed[0].download_count == 123
 
 
 def test_saved_sound_metadata_can_be_updated_and_preserved(tmp_path: Path) -> None:
@@ -808,6 +927,60 @@ def test_freesound_original_download_returns_attachment(tmp_path: Path, monkeypa
     assert "Slash.wav" in response.headers["content-disposition"]
 
 
+def test_freesound_original_download_can_prefer_requested_name(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-original-custom-name.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    save_freesound_oauth_token(
+        settings.database_path,
+        FreesoundOAuthToken(
+            workspace_id="owner",
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_at=4_000_000_000,
+            username="owner-user",
+        ),
+    )
+    original_path = tmp_path / "original.wav"
+    original_path.write_bytes(b"original-audio")
+
+    async def fake_download(
+        settings_arg: Settings,
+        source_id: str,
+        access_token: str,
+        name: str,
+    ) -> FreesoundOriginalDownload:
+        assert settings_arg == settings
+        assert source_id == "123"
+        assert access_token == "access-token"
+        assert name == "UI_1"
+        return FreesoundOriginalDownload(
+            path=original_path,
+            filename="Original Slash.wav",
+            media_type="audio/wav",
+        )
+
+    monkeypatch.setattr("backend.app.main.download_freesound_original", fake_download)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/freesound/original-download/123",
+        params={"workspace_id": "owner", "name": "UI_1", "prefer_name": "true"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"original-audio"
+    assert "attachment" in response.headers["content-disposition"]
+    assert "UI_1.wav" in response.headers["content-disposition"]
+    assert "Original Slash.wav" not in response.headers["content-disposition"]
+
+
 def test_openverse_base_url_normalizes_v1_suffix() -> None:
     assert (
         _normalize_openverse_base_url("https://api.openverse.org/v1")
@@ -1023,6 +1196,31 @@ def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["results"] == []
     assert "Freesound API 키" in response.json()["source_warnings"][0]
+    assert "폭발" in response.json()["interpreted_concepts"]
+    assert response.json()["negative_concepts"] == []
+    assert response.json()["suggested_queries"]
+
+
+def test_search_suggestions_endpoint_returns_conservative_suggestions(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "suggestions.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get("/api/search-suggestions", params={"prompt": "잔잔한 루프 브금"})
+
+    assert response.status_code == 200
+    prompts = [item["prompt"] for item in response.json()["suggestions"]]
+    assert "seamless loop bgm" in prompts
+
+    unclear = client.get("/api/search-suggestions", params={"prompt": "테스트"})
+
+    assert unclear.status_code == 200
+    assert unclear.json()["suggestions"] == []
 
 
 def test_freesound_client_uses_search_endpoint_and_fields() -> None:
@@ -1030,6 +1228,7 @@ def test_freesound_client_uses_search_endpoint_and_fields() -> None:
         assert request.url.path == "/apiv2/search/"
         assert request.headers["Authorization"] == "Token test-token"
         assert "fields=id%2Cname%2Cusername%2Clicense" in str(request.url)
+        assert "num_downloads" in str(request.url)
         return httpx.Response(
             200,
             json={
@@ -1044,6 +1243,7 @@ def test_freesound_client_uses_search_endpoint_and_fields() -> None:
                         "previews": {"preview-hq-mp3": "https://example.com/boom.mp3"},
                         "url": "https://freesound.org/s/99/",
                         "description": "Test sound",
+                        "num_downloads": 456,
                     }
                 ]
             },
@@ -1069,6 +1269,7 @@ def test_freesound_client_uses_search_endpoint_and_fields() -> None:
     assert results[0].preview_url == "https://example.com/boom.mp3"
     assert results[0].source_provider == "freesound"
     assert results[0].source_id == "99"
+    assert results[0].download_count == 456
 
 
 def test_jamendo_client_normalizes_tracks_and_download_policy() -> None:

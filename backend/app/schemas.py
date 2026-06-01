@@ -78,6 +78,16 @@ class SearchRequest(BaseModel):
     source_filter: SourceFilter = "all"
 
 
+class SearchSuggestion(BaseModel):
+    label: str
+    prompt: str
+    reason: str = ""
+
+
+class SearchSuggestionsResponse(BaseModel):
+    suggestions: list[SearchSuggestion] = Field(default_factory=list)
+
+
 class SoundSearchResult(BaseModel):
     id: int
     name: str
@@ -99,6 +109,7 @@ class SoundSearchResult(BaseModel):
     attribution_text: str | None = None
     download_url: str | None = None
     download_allowed: bool = True
+    download_count: int | None = None
 
 
 class SoundAnalysis(BaseModel):
@@ -123,6 +134,9 @@ class SearchResponse(BaseModel):
     query: str
     results: list[SoundSearchResult]
     source_warnings: list[str] = Field(default_factory=list)
+    interpreted_concepts: list[str] = Field(default_factory=list)
+    negative_concepts: list[str] = Field(default_factory=list)
+    suggested_queries: list[SearchSuggestion] = Field(default_factory=list)
 
 
 class SavedSound(BaseModel):
@@ -147,6 +161,7 @@ class SavedSound(BaseModel):
     attribution_text: str | None = None
     download_url: str | None = None
     download_allowed: bool = True
+    download_count: int | None = None
     note: str = ""
     fit_rating: int | None = Field(None, ge=1, le=5)
     folder: str = ""

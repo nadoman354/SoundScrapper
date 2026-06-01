@@ -44,6 +44,12 @@
                   required
                 />
               </label>
+              <div
+                id="search-suggestions"
+                class="search-suggestions"
+                aria-live="polite"
+                hidden
+              ></div>
               <div class="search-memory">
                 <button
                   id="favorite-search"
@@ -114,6 +120,29 @@
                     max="50"
                     step="1"
                     value="20"
+                  />
+                </label>
+
+                <label data-tooltip="현재 검색 결과를 어떤 기준으로 볼지 정합니다. API 재검색 없이 화면에서만 재정렬합니다.">
+                  <span>결과 정렬</span>
+                  <select id="result-sort" name="result-sort">
+                    <option value="score" selected>점수순</option>
+                    <option value="duration_asc">짧은 순</option>
+                    <option value="duration_desc">긴 순</option>
+                    <option value="downloads_desc">다운로드 많은 순</option>
+                  </select>
+                </label>
+
+                <label data-tooltip="최근 들은 사운드를 몇 번의 검색 동안 강조할지 정합니다. 0이면 표시하지 않습니다.">
+                  <span>최근 청취 표시</span>
+                  <input
+                    id="recent-listen-window"
+                    name="recent-listen-window"
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="1"
+                    value="5"
                   />
                 </label>
 
@@ -255,6 +284,8 @@
           </div>
         </div>
         <div class="loud-warning" hidden>청취 주의: 음량이 큼</div>
+        <div class="license-warning" hidden></div>
+        <div class="recent-listen-note" hidden></div>
         <div class="analysis-state" hidden>분석됨</div>
         <div class="waveform-panel" hidden>
           <canvas class="waveform-canvas" width="640" height="96"></canvas>

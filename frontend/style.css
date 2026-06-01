@@ -241,6 +241,51 @@ select {
   font-weight: 600;
 }
 
+.search-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #d5e3e1;
+  border-radius: 8px;
+  background: #f8fffd;
+  padding: 9px 10px;
+}
+
+.suggestion-panel-label {
+  flex: 0 0 auto;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 30px;
+}
+
+.suggestion-chip-list,
+.result-suggestion-chips {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.suggestion-chip {
+  max-width: min(260px, 100%);
+  min-height: 30px;
+  overflow: hidden;
+  border: 1px solid #9fd3cc;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  padding: 0 10px;
+  text-overflow: ellipsis;
+}
+
+.suggestion-chip:hover {
+  background: #ecfdf5;
+}
+
 .search-memory {
   display: grid;
   gap: 8px;
@@ -604,6 +649,53 @@ select {
   align-items: start;
 }
 
+.result-suggestions {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d5e3e1;
+  border-radius: 8px;
+  background: #fbfffe;
+  box-shadow: var(--shadow);
+  padding: 13px;
+}
+
+.result-suggestions h3 {
+  margin: 0;
+  font-size: 0.94rem;
+  line-height: 1.3;
+}
+
+.result-suggestions p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.result-guidance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.guidance-button {
+  min-height: 32px;
+  border: 1px solid #9fd3cc;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  padding: 0 10px;
+}
+
+.guidance-button:hover {
+  background: #ecfdf5;
+}
+
+.result-suggestions .suggestion-panel-label {
+  line-height: 30px;
+}
+
 .sound-card,
 .saved-item {
   border: 1px solid var(--line);
@@ -619,6 +711,13 @@ select {
   min-width: 0;
   overflow: hidden;
   padding: 12px;
+}
+
+.sound-card.is-recently-listened {
+  border-color: #fbbf24;
+  box-shadow:
+    0 0 0 2px rgba(251, 191, 36, 0.24),
+    var(--shadow);
 }
 
 .card-head {
@@ -756,6 +855,43 @@ select {
   font-weight: 900;
   line-height: 1.35;
   padding: 7px 9px;
+}
+
+.license-warning,
+.recent-listen-note {
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  padding: 7px 9px;
+}
+
+.license-warning-safe {
+  border-color: #9fd3cc;
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.license-warning-warn {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.license-warning-danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.recent-listen-note {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
 }
 
 .analysis-state {

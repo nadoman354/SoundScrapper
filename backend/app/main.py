@@ -51,7 +51,7 @@ from backend.app.freesound_oauth import (
 from backend.app.jamendo_client import JamendoClient, JamendoConfigurationError
 from backend.app.openverse_client import OpenverseClient
 from backend.app.preview_cache import PreviewCacheError, cache_preview_audio, media_type_for_path
-from backend.app.prompt_parser import parse_prompt
+from backend.app.prompt_parser import PromptSuggestion, build_search_suggestions, parse_prompt
 from backend.app.ranker import score_sound, sort_ranked
 from backend.app.schemas import (
     FeedbackRequest,
@@ -70,6 +70,8 @@ from backend.app.schemas import (
     SavedSoundUpdate,
     SearchRequest,
     SearchResponse,
+    SearchSuggestion,
+    SearchSuggestionsResponse,
     SoundAnalysis,
     SoundSearchResult,
 )
@@ -138,6 +140,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     base_url=request_settings.openverse_base_url,
                 ),
             ]
+        )
+
+    @app.get("/api/search-suggestions", response_model=SearchSuggestionsResponse)
+    def search_suggestions(prompt: str = "") -> SearchSuggestionsResponse:
+        return SearchSuggestionsResponse(
+            suggestions=_search_suggestion_models(
+                build_search_suggestions(prompt, limit=4)
+            )
         )
 
     @app.get("/api/freesound/auth-status", response_model=FreesoundAuthStatus)
@@ -241,6 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fastapi_request: Request,
         name: str = "sound",
         workspace_id: str | None = None,
+        prefer_name: bool = False,
     ) -> FileResponse:
         request_settings: Settings = fastapi_request.app.state.settings
         active_workspace_id = _workspace_id_from_value(
@@ -272,7 +283,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             download.path,
             media_type=download.media_type,
             filename=_safe_download_filename(
-                download.filename or name,
+                name if prefer_name else download.filename or name,
                 source_id,
                 download.path.suffix,
                 preserve_extension=True,
@@ -351,10 +362,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             adjusted.append(result)
 
+        sorted_results = sort_ranked(adjusted)
+        suggested_queries = (
+            _search_suggestion_models(build_search_suggestions(parsed, limit=3))
+            if len(sorted_results) <= 5
+            else []
+        )
+
         return SearchResponse(
             query=parsed.query,
-            results=sort_ranked(adjusted),
+            results=sorted_results,
             source_warnings=source_warnings,
+            interpreted_concepts=list(parsed.interpreted_concepts),
+            negative_concepts=list(parsed.negative_concepts),
+            suggested_queries=suggested_queries,
         )
 
     @app.post("/api/saved-sounds", response_model=SavedSound)
@@ -579,6 +600,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+
+
+def _search_suggestion_models(
+    suggestions: tuple[PromptSuggestion, ...],
+) -> list[SearchSuggestion]:
+    return [
+        SearchSuggestion(
+            label=suggestion.label,
+            prompt=suggestion.prompt,
+            reason=suggestion.reason,
+        )
+        for suggestion in suggestions
+    ]
 
 
 async def _search_sources(

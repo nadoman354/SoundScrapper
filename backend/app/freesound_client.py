@@ -9,7 +9,7 @@ from backend.app.schemas import LicenseFilter, SoundSearchResult
 from backend.app.source_identity import stable_sound_id
 
 
-FREESOUND_FIELDS = "id,name,username,license,duration,tags,previews,url,description"
+FREESOUND_FIELDS = "id,name,username,license,duration,tags,previews,url,description,num_downloads"
 
 
 class FreesoundConfigurationError(RuntimeError):
@@ -94,6 +94,7 @@ def normalize_sound(item: Mapping[str, Any]) -> SoundSearchResult:
         attribution_text=_attribution_text(item),
         download_url=preview_url,
         download_allowed=bool(preview_url),
+        download_count=_optional_int(item.get("num_downloads")),
     )
 
 
@@ -110,3 +111,10 @@ def _attribution_text(item: Mapping[str, Any]) -> str:
     username = str(item.get("username") or "Unknown creator")
     license_name = str(item.get("license") or "Unknown license")
     return f"{name} by {username} ({license_name})"
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

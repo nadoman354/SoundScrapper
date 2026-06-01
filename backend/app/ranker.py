@@ -60,7 +60,6 @@ CLEAN_TERMS = (
     "studio",
 )
 
-
 def _with_score(
     result: SoundSearchResult,
     score: int,
@@ -111,12 +110,12 @@ def score_sound(
             reasons.append(f"길이 초과 -{penalty}")
 
     searchable_text = _searchable_text(result)
-    matched_terms = [term for term in parsed_prompt.include_terms if term in searchable_text]
-    match_bonus = min(20, len(set(matched_terms)) * 4)
+    match_bonus, match_reasons = _weighted_term_match_adjustment(
+        result,
+        parsed_prompt.include_terms,
+    )
     score += match_bonus
-    if match_bonus:
-        sample = ", ".join(sorted(set(matched_terms))[:4])
-        reasons.append(f"검색어 일치 +{match_bonus} ({sample})")
+    reasons.extend(match_reasons)
 
     if result.preview_url:
         score += 5
@@ -125,6 +124,22 @@ def score_sound(
     source_score, source_reasons = _source_adjustment(result, set(search_modes or []))
     score += source_score
     reasons.extend(source_reasons)
+
+    context_score, context_reasons = _context_intent_adjustment(
+        result,
+        searchable_text,
+        parsed_prompt,
+    )
+    score += context_score
+    reasons.extend(context_reasons)
+
+    negative_score, negative_reasons = _negative_context_adjustment(
+        result,
+        searchable_text,
+        parsed_prompt,
+    )
+    score += negative_score
+    reasons.extend(negative_reasons)
 
     if game_ready:
         game_adjustment, game_reasons = _game_ready_adjustment(
@@ -160,6 +175,133 @@ def _searchable_text(result: SoundSearchResult) -> str:
             " ".join(result.tags),
         ]
     ).lower()
+
+
+def _field_texts(result: SoundSearchResult) -> tuple[str, str, str]:
+    title = result.name.lower()
+    description = (result.description or "").lower()
+    tags = " ".join(result.tags).lower()
+    return title, description, tags
+
+
+def _weighted_term_match_adjustment(
+    result: SoundSearchResult,
+    terms: tuple[str, ...],
+) -> tuple[int, list[str]]:
+    title, description, tags = _field_texts(result)
+    matched_by_field: dict[str, list[str]] = {"태그": [], "제목": [], "설명": []}
+    score = 0
+
+    for term in terms:
+        if term in tags:
+            score += 5
+            matched_by_field["태그"].append(term)
+        elif term in title:
+            score += 4
+            matched_by_field["제목"].append(term)
+        elif term in description:
+            score += 2
+            matched_by_field["설명"].append(term)
+
+    score = min(24, score)
+    if score == 0:
+        return 0, []
+
+    parts = []
+    for field_name in ("태그", "제목", "설명"):
+        matches = sorted(set(matched_by_field[field_name]))[:4]
+        if matches:
+            parts.append(f"{field_name}: {', '.join(matches)}")
+    return score, [f"검색어 일치 +{score} ({'; '.join(parts)})"]
+
+
+def _context_intent_adjustment(
+    result: SoundSearchResult,
+    text: str,
+    parsed_prompt: ParsedPrompt,
+) -> tuple[int, list[str]]:
+    flags = set(parsed_prompt.intent_flags)
+    provider = result.source_provider.lower()
+    score = 0
+    reasons: list[str] = []
+
+    if "sfx" in flags:
+        if result.duration <= 3:
+            score += 6
+            reasons.append("맥락: 짧은 SFX 의도 +6")
+        if provider == "freesound":
+            score += 4
+            reasons.append("맥락: Freesound SFX 후보 +4")
+        if _contains_any(text, SFX_TERMS):
+            score += 5
+            reasons.append("맥락: SFX 단서 +5")
+
+    if "bgm" in flags:
+        if provider == "jamendo":
+            score += 7
+            reasons.append("맥락: Jamendo BGM 후보 +7")
+        elif provider not in {"freesound", "jamendo"}:
+            score += 4
+            reasons.append("맥락: Openverse 음악 후보 +4")
+        if result.duration >= 4:
+            score += 6
+            reasons.append("맥락: BGM에 맞는 길이 +6")
+        elif result.duration <= 1.5:
+            score -= 8
+            reasons.append("맥락: BGM으로는 짧음 -8")
+        if _contains_any(text, BGM_TERMS):
+            score += 8
+            reasons.append("맥락: BGM/루프 단서 +8")
+
+    if "loop" in flags:
+        if _contains_any(text, BGM_TERMS):
+            score += 5
+            reasons.append("맥락: 루프 단서 +5")
+        if result.duration >= 4:
+            score += 4
+            reasons.append("맥락: 루프에 맞는 길이 +4")
+
+    if "clean" in flags:
+        if _contains_any(text, CLEAN_TERMS):
+            score += 5
+            reasons.append("맥락: 깨끗한 소스 단서 +5")
+        if _contains_any(text, NOISE_AMBIENCE_TERMS):
+            score -= 10
+            reasons.append("맥락: 잡음/환경음 단서 -10")
+
+    if "short" in flags:
+        if result.duration <= 3:
+            score += 5
+            reasons.append("맥락: 짧은 길이 선호 +5")
+        elif result.duration > 5:
+            score -= 8
+            reasons.append("맥락: 짧은 소리 의도와 거리 있음 -8")
+
+    return max(-30, min(30, score)), reasons
+
+
+def _negative_context_adjustment(
+    result: SoundSearchResult,
+    text: str,
+    parsed_prompt: ParsedPrompt,
+) -> tuple[int, list[str]]:
+    matches = sorted({term for term in parsed_prompt.negative_terms if term in text})
+    score = 0
+    reasons: list[str] = []
+
+    if matches:
+        penalty = min(28, 8 + (len(matches) - 1) * 4)
+        score -= penalty
+        concepts = ", ".join(parsed_prompt.negative_concepts) or "부정 조건"
+        sample = ", ".join(matches[:4])
+        reasons.append(f"부정 조건: {concepts} 단서 -{penalty} ({sample})")
+
+    if "긴 사운드 제외" in parsed_prompt.negative_concepts and result.duration > 5:
+        penalty = min(18, 6 + int(result.duration - 5) * 2)
+        score -= penalty
+        reasons.append(f"부정 조건: 긴 사운드 -{penalty}")
+
+    return max(-35, min(0, score)), reasons
 
 
 def _game_ready_adjustment(

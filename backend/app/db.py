@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS saved_sounds (
     attribution_text TEXT,
     download_url TEXT,
     download_allowed INTEGER NOT NULL DEFAULT 1,
+    download_count INTEGER,
     note TEXT NOT NULL DEFAULT '',
     fit_rating INTEGER,
     folder TEXT NOT NULL DEFAULT '',
@@ -143,9 +144,9 @@ def save_sound(
                 workspace_id, freesound_id, name, username, license, duration, tags,
                 preview_url, url, description, score, source_provider, source_id,
                 source_url, license_url, creator_url, attribution_text, download_url,
-                download_allowed
+                download_allowed, download_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(workspace_id, source_provider, source_id) DO UPDATE SET
                 freesound_id = excluded.freesound_id,
                 name = excluded.name,
@@ -163,6 +164,7 @@ def save_sound(
                 attribution_text = excluded.attribution_text,
                 download_url = excluded.download_url,
                 download_allowed = excluded.download_allowed,
+                download_count = excluded.download_count,
                 saved_at = CURRENT_TIMESTAMP
             """,
             (
@@ -185,6 +187,7 @@ def save_sound(
                 sound.attribution_text,
                 sound.download_url,
                 int(sound.download_allowed),
+                sound.download_count,
             ),
         )
         connection.commit()
@@ -752,6 +755,7 @@ def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
         attribution_text=row["attribution_text"],
         download_url=row["download_url"],
         download_allowed=bool(row["download_allowed"]),
+        download_count=row["download_count"] if "download_count" in row.keys() else None,
         note=row["note"] if "note" in row.keys() else "",
         fit_rating=row["fit_rating"] if "fit_rating" in row.keys() else None,
         folder=row["folder"] if "folder" in row.keys() else "",
@@ -1005,6 +1009,7 @@ def _ensure_saved_source_columns(connection: sqlite3.Connection) -> None:
         "attribution_text": "TEXT",
         "download_url": "TEXT",
         "download_allowed": "INTEGER NOT NULL DEFAULT 1",
+        "download_count": "INTEGER",
     }
     for name, definition in column_defaults.items():
         if name not in columns:
@@ -1213,6 +1218,7 @@ def _rebuild_saved_sounds_if_needed(connection: sqlite3.Connection) -> None:
             attribution_text TEXT,
             download_url TEXT,
             download_allowed INTEGER NOT NULL DEFAULT 1,
+            download_count INTEGER,
             note TEXT NOT NULL DEFAULT '',
             fit_rating INTEGER,
             folder TEXT NOT NULL DEFAULT '',
@@ -1228,13 +1234,14 @@ def _rebuild_saved_sounds_if_needed(connection: sqlite3.Connection) -> None:
             id, workspace_id, freesound_id, name, username, license, duration, tags,
             preview_url, url, description, score, source_provider, source_id,
             source_url, license_url, creator_url, attribution_text, download_url,
-            download_allowed, note, fit_rating, folder, labels, download_filename, saved_at
+            download_allowed, download_count, note, fit_rating, folder, labels,
+            download_filename, saved_at
         )
         SELECT
             id, COALESCE(NULLIF(workspace_id, ''), 'local'), freesound_id, name, username,
             license, duration, tags, preview_url, url, description, score,
             source_provider, source_id, source_url, license_url, creator_url,
-            attribution_text, download_url, download_allowed, note, fit_rating,
+            attribution_text, download_url, download_allowed, download_count, note, fit_rating,
             folder, labels, download_filename, saved_at
         FROM saved_sounds_legacy
         """

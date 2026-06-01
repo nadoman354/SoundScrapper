@@ -1,4 +1,5 @@
 const form = document.querySelector("#search-form");
+const promptInput = document.querySelector("#prompt");
 const statusEl = document.querySelector("#status");
 const conditionWarningEl = document.querySelector("#condition-warning");
 const workspaceLayout = document.querySelector(".workspace-layout");
@@ -16,8 +17,11 @@ const newFolderInput = document.querySelector("#new-folder-name");
 const createFolderButton = document.querySelector("#create-folder");
 const favoriteSearchButton = document.querySelector("#favorite-search");
 const soloLongAudioInput = document.querySelector("#solo-long-audio");
+const resultSortSelect = document.querySelector("#result-sort");
+const recentListenWindowInput = document.querySelector("#recent-listen-window");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
+const searchSuggestionsEl = document.querySelector("#search-suggestions");
 const headerAuthEl = document.querySelector("#header-auth");
 const template = document.querySelector("#sound-card-template");
 const helpTourStartButton = document.querySelector("#help-tour-start");
@@ -38,6 +42,7 @@ const downloadChoicePreviewButton = document.querySelector("#download-choice-pre
 const downloadChoiceCancelButton = document.querySelector("#download-choice-cancel");
 
 let lastResults = [];
+let lastResultSuggestions = [];
 let savedSounds = [];
 let savedFolders = [];
 let freesoundAuthStatus = { configured: false, logged_in: false };
@@ -53,6 +58,12 @@ const SAVED_FOLDER_STATE_KEY = "soundscrapper.savedFolderState";
 const SAVED_COLLAPSE_STATE_KEY = "soundscrapper.savedCollapseState";
 const SAVED_PANEL_COLLAPSED_KEY = "soundscrapper.savedPanelCollapsed";
 const WORKSPACE_ID_KEY = "soundscrapper.workspaceId";
+const SEARCH_SEQUENCE_KEY = "soundscrapper.searchSequence";
+const RECENT_PLAYED_SOUNDS_KEY = "soundscrapper.recentPlayedSounds";
+const RECENT_LISTEN_WINDOW_KEY = "soundscrapper.recentListenSearchWindow";
+const DEFAULT_RECENT_LISTEN_WINDOW = 5;
+
+let currentSearchSequence = readStoredNumber(SEARCH_SEQUENCE_KEY, 0);
 
 const LICENSE_LABELS = {
   "creative commons 0": "CC0",
@@ -279,6 +290,8 @@ let helpTourTarget = null;
 let tooltipTimer = null;
 let tooltipTarget = null;
 let tooltipRaf = null;
+let searchSuggestionTimer = null;
+let searchSuggestionRequestId = 0;
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -297,6 +310,15 @@ function writeStoredList(key, values) {
   localStorage.setItem(key, JSON.stringify(values));
 }
 
+function readStoredNumber(key, fallback) {
+  const value = Number.parseInt(localStorage.getItem(key) || "", 10);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function writeStoredNumber(key, value) {
+  localStorage.setItem(key, String(Math.max(0, Math.trunc(value))));
+}
+
 function rememberSearch(prompt) {
   const normalized = prompt.trim();
   if (!normalized) {
@@ -308,7 +330,7 @@ function rememberSearch(prompt) {
 }
 
 function toggleFavoriteSearch() {
-  const prompt = document.querySelector("#prompt").value.trim();
+  const prompt = promptInput.value.trim();
   if (!prompt) {
     setStatus("즐겨찾기에 넣을 검색어를 먼저 입력하세요.");
     return;
@@ -340,11 +362,107 @@ function renderSearchChips(container, items, emptyText) {
     button.type = "button";
     button.textContent = item;
     button.addEventListener("click", () => {
-      document.querySelector("#prompt").value = item;
+      promptInput.value = item;
+      scheduleLiveSearchSuggestions();
       setStatus(`검색어 불러옴: ${item}`);
     });
     container.append(button);
   }
+}
+
+function scheduleLiveSearchSuggestions() {
+  if (!searchSuggestionsEl) {
+    return;
+  }
+  window.clearTimeout(searchSuggestionTimer);
+  const prompt = promptInput.value.trim();
+  if (prompt.length < 2) {
+    renderLiveSearchSuggestions([]);
+    return;
+  }
+  searchSuggestionTimer = window.setTimeout(() => {
+    loadLiveSearchSuggestions(prompt).catch(() => {
+      renderLiveSearchSuggestions([]);
+    });
+  }, 300);
+}
+
+async function loadLiveSearchSuggestions(prompt) {
+  const requestId = searchSuggestionRequestId + 1;
+  searchSuggestionRequestId = requestId;
+  const data = await apiFetch(
+    `/api/search-suggestions?prompt=${encodeURIComponent(prompt)}`
+  );
+  if (requestId !== searchSuggestionRequestId || prompt !== promptInput.value.trim()) {
+    return;
+  }
+  renderLiveSearchSuggestions(data.suggestions || []);
+}
+
+function renderLiveSearchSuggestions(suggestions) {
+  renderSuggestionPanel(searchSuggestionsEl, suggestions, {
+    title: "추천 검색어",
+    emptyHidden: true,
+    statusPrefix: "추천 검색어 입력",
+  });
+}
+
+function renderSuggestionPanel(container, suggestions, options = {}) {
+  if (!container) {
+    return;
+  }
+  const filtered = normalizeSuggestions(suggestions);
+  container.replaceChildren();
+  if (filtered.length === 0) {
+    container.hidden = options.emptyHidden !== false;
+    if (!container.hidden && options.emptyText) {
+      container.append(emptyState(options.emptyText));
+    }
+    return;
+  }
+
+  container.hidden = false;
+  const label = document.createElement("span");
+  label.className = "suggestion-panel-label";
+  label.textContent = options.title || "추천";
+  const list = document.createElement("div");
+  list.className = "suggestion-chip-list";
+
+  for (const suggestion of filtered) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "suggestion-chip";
+    button.textContent = suggestion.label || suggestion.prompt;
+    button.dataset.tooltip = suggestion.reason || "추천 검색어를 입력합니다.";
+    button.addEventListener("click", () => {
+      promptInput.value = suggestion.prompt;
+      promptInput.focus();
+      scheduleLiveSearchSuggestions();
+      setStatus(`${options.statusPrefix || "추천어 입력"}: ${suggestion.prompt}`);
+    });
+    list.append(button);
+  }
+
+  container.append(label, list);
+}
+
+function normalizeSuggestions(suggestions) {
+  const seen = new Set();
+  const currentPrompt = promptInput.value.trim().toLowerCase();
+  return (Array.isArray(suggestions) ? suggestions : [])
+    .map((suggestion) => ({
+      label: String(suggestion.label || suggestion.prompt || "").trim(),
+      prompt: String(suggestion.prompt || suggestion.label || "").trim(),
+      reason: String(suggestion.reason || "").trim(),
+    }))
+    .filter((suggestion) => {
+      const normalized = suggestion.prompt.toLowerCase().replace(/\s+/g, " ");
+      if (!normalized || normalized === currentPrompt || seen.has(normalized)) {
+        return false;
+      }
+      seen.add(normalized);
+      return true;
+    });
 }
 
 function formNumber(id, fallback) {
@@ -364,7 +482,7 @@ function selectedSearchModes() {
 
 function buildSearchPayload() {
   return {
-    prompt: document.querySelector("#prompt").value.trim(),
+    prompt: promptInput.value.trim(),
     license: document.querySelector("#license").value,
     source_filter: document.querySelector("#source-filter").value,
     min_duration: formNumber("#min-duration", 0.1),
@@ -373,6 +491,41 @@ function buildSearchPayload() {
     game_ready: checkboxValue("#game-ready"),
     search_modes: selectedSearchModes(),
   };
+}
+
+function sortedSearchResults(results = lastResults) {
+  const sortKey = resultSortSelect?.value || "score";
+  const ranked = [...results];
+  const byScore = (left, right) =>
+    (right.score || 0) - (left.score || 0) ||
+    (left.duration || 0) - (right.duration || 0) ||
+    String(left.name || "").localeCompare(String(right.name || ""), "ko");
+  const sorters = {
+    score: byScore,
+    duration_asc: (left, right) =>
+      (left.duration || 0) - (right.duration || 0) || byScore(left, right),
+    duration_desc: (left, right) =>
+      (right.duration || 0) - (left.duration || 0) || byScore(left, right),
+    downloads_desc: (left, right) =>
+      downloadCountValue(right) - downloadCountValue(left) ||
+      hasDownloadCount(right) - hasDownloadCount(left) ||
+      byScore(left, right),
+  };
+  return ranked.sort(sorters[sortKey] || byScore);
+}
+
+function downloadCountValue(sound) {
+  return hasDownloadCount(sound) ? Number(sound.download_count) : -1;
+}
+
+function hasDownloadCount(sound) {
+  return sound.download_count !== null &&
+    sound.download_count !== undefined &&
+    Number.isFinite(Number(sound.download_count));
+}
+
+function renderCurrentResults() {
+  renderResults(sortedSearchResults(), lastResultSuggestions);
 }
 
 function soundIdentity(sound) {
@@ -681,6 +834,53 @@ function licenseCreditNote(license) {
   return "라이선스 원본 확인 필요";
 }
 
+function licenseWarningInfo(sound) {
+  const label = licenseLabel(sound.license);
+  const key = `${sound.license || ""} ${label}`.toLowerCase();
+  if (label === "CC0" || key.includes("publicdomain/zero")) {
+    return {
+      tone: "safe",
+      text: "라이선스: CC0 · 출처 표기 선택",
+    };
+  }
+  if (
+    key.includes("noncommercial") ||
+    key.includes("cc by-nc") ||
+    key.includes("cc by-nd") ||
+    key.includes("cc by-sa") ||
+    label === "라이선스 미상" ||
+    key.includes("unknown") ||
+    key.includes("license")
+  ) {
+    return {
+      tone: "danger",
+      text: `라이선스 확인: ${label} · 게임 사용 전 원본 확인 필요`,
+    };
+  }
+  if (key.includes("attribution") || key.includes("cc by")) {
+    return {
+      tone: "warn",
+      text: `라이선스: ${label} · 출처 표기 필요`,
+    };
+  }
+  return {
+    tone: "danger",
+    text: `라이선스 확인: ${label} · 게임 사용 전 원본 확인 필요`,
+  };
+}
+
+function renderLicenseWarning(node, sound) {
+  const warning = node.querySelector(".license-warning");
+  if (!warning) {
+    return;
+  }
+  const info = licenseWarningInfo(sound);
+  warning.hidden = false;
+  warning.className = `license-warning license-warning-${info.tone}`;
+  warning.textContent = info.text;
+  warning.dataset.tooltip = "저장하거나 다운로드하기 전에 원본 페이지의 라이선스와 출처 표기 조건을 확인하세요.";
+}
+
 function sourceLabel(provider) {
   return SOURCE_LABELS[(provider || "").toLowerCase()] || provider || "Unknown";
 }
@@ -734,11 +934,14 @@ function previewAudioUrl(sound) {
   return `/api/preview-audio/${sound.id}?preview_url=${encodeURIComponent(sound.preview_url)}`;
 }
 
-function freesoundOriginalDownloadUrl(sound, nameOverride = null) {
+function freesoundOriginalDownloadUrl(sound, nameOverride = null, options = {}) {
   const params = new URLSearchParams({
     workspace_id: workspaceId(),
     name: nameOverride || sound.name || "sound",
   });
+  if (options.preferName) {
+    params.set("prefer_name", "true");
+  }
   return `/api/freesound/original-download/${encodeURIComponent(sound.source_id || sound.id)}?${params.toString()}`;
 }
 
@@ -773,6 +976,14 @@ function originalDownloadName(sound) {
   return filenameFromUrl(sound.download_url) || filenameFromUrl(sound.preview_url) || "sound";
 }
 
+function resultMetaText(sound) {
+  const parts = [`${Number(sound.duration || 0).toFixed(2)}초`, licenseLabel(sound.license)];
+  if (hasDownloadCount(sound)) {
+    parts.push(`다운로드 ${Number(sound.download_count).toLocaleString("ko-KR")}회`);
+  }
+  return parts.join(" · ");
+}
+
 function filenameFromUrl(url) {
   if (!url) {
     return "";
@@ -787,6 +998,8 @@ function filenameFromUrl(url) {
 
 function setupExclusivePlayback(audio, sound) {
   audio.addEventListener("play", () => {
+    recordPlayedSound(sound);
+    refreshRecentListenIndicators();
     if (!shouldSoloLongAudio(sound)) {
       return;
     }
@@ -800,6 +1013,108 @@ function setupExclusivePlayback(audio, sound) {
 
 function shouldSoloLongAudio(sound) {
   return Boolean(soloLongAudioInput?.checked && Number(sound.duration || 0) >= 10);
+}
+
+function recentListenWindow() {
+  return clampNumber(
+    readStoredNumber(RECENT_LISTEN_WINDOW_KEY, DEFAULT_RECENT_LISTEN_WINDOW),
+    0,
+    50
+  );
+}
+
+function initializeRecentListenWindow() {
+  if (!recentListenWindowInput) {
+    return;
+  }
+  recentListenWindowInput.value = String(recentListenWindow());
+  recentListenWindowInput.addEventListener("change", () => {
+    const nextValue = clampNumber(Number.parseInt(recentListenWindowInput.value || "0", 10), 0, 50);
+    recentListenWindowInput.value = String(nextValue);
+    writeStoredNumber(RECENT_LISTEN_WINDOW_KEY, nextValue);
+    refreshRecentListenIndicators();
+    setStatus(
+      nextValue === 0
+        ? "최근 청취 강조를 끔"
+        : `최근 청취 강조: ${nextValue}번 검색까지 표시`
+    );
+  });
+}
+
+function nextSearchSequence() {
+  currentSearchSequence += 1;
+  writeStoredNumber(SEARCH_SEQUENCE_KEY, currentSearchSequence);
+}
+
+function readRecentPlayedSounds() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECENT_PLAYED_SOUNDS_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRecentPlayedSounds(value) {
+  const entries = Object.entries(value)
+    .filter(([, record]) => record && Number.isFinite(Number(record.searchIndex)))
+    .sort((left, right) => Number(right[1].playedAt || 0) - Number(left[1].playedAt || 0))
+    .slice(0, 160);
+  localStorage.setItem(RECENT_PLAYED_SOUNDS_KEY, JSON.stringify(Object.fromEntries(entries)));
+}
+
+function recordPlayedSound(sound) {
+  if (!sound || isHelpDemoActive()) {
+    return;
+  }
+  const records = readRecentPlayedSounds();
+  records[soundIdentity(sound)] = {
+    searchIndex: currentSearchSequence,
+    playedAt: Date.now(),
+  };
+  writeRecentPlayedSounds(records);
+}
+
+function recentListenInfo(sound) {
+  const windowSize = recentListenWindow();
+  if (windowSize <= 0) {
+    return null;
+  }
+  const record = readRecentPlayedSounds()[soundIdentity(sound)];
+  if (!record) {
+    return null;
+  }
+  const distance = currentSearchSequence - Number(record.searchIndex);
+  if (distance < 0 || distance > windowSize) {
+    return null;
+  }
+  return {
+    distance,
+    text: distance === 0 ? "최근 청취: 이번 검색에서 들음" : `최근 청취: ${distance}번 전 검색에서 들음`,
+  };
+}
+
+function renderRecentListenState(node, sound) {
+  const note = node.querySelector(".recent-listen-note");
+  const info = recentListenInfo(sound);
+  node.classList.toggle("is-recently-listened", Boolean(info));
+  if (!note) {
+    return;
+  }
+  if (!info) {
+    note.hidden = true;
+    note.textContent = "";
+    return;
+  }
+  note.hidden = false;
+  note.textContent = info.text;
+  note.dataset.tooltip = "최근 몇 번의 검색 안에서 재생한 후보입니다.";
+}
+
+function refreshRecentListenIndicators() {
+  for (const { sound, node } of cardContexts.values()) {
+    renderRecentListenState(node, sound);
+  }
 }
 
 function renderTags(container, tags, limit = 5) {
@@ -909,8 +1224,7 @@ function renderSoundCard(sound) {
   sourceBadge.classList.add(`source-${sound.source_provider || "unknown"}`);
   sourceBadge.dataset.tooltip = "검색된 사운드의 출처입니다.";
   node.querySelector("h3").textContent = sound.name;
-  node.querySelector(".meta").textContent =
-    `${sound.duration.toFixed(2)}초 · ${licenseLabel(sound.license)}`;
+  node.querySelector(".meta").textContent = resultMetaText(sound);
   const adjustment =
     sound.personal_score_adjustment > 0
       ? ` +${sound.personal_score_adjustment}`
@@ -921,6 +1235,8 @@ function renderSoundCard(sound) {
   node.querySelector(".license-note").textContent = licenseCreditNote(sound.license);
   renderAttributionNote(node.querySelector(".attribution-note"), sound);
   renderLoudWarning(node);
+  renderLicenseWarning(node, sound);
+  renderRecentListenState(node, sound);
   renderFitBadges(node.querySelector(".fit-badges"), sound);
   renderScoreReasons(node.querySelector(".score-reasons"), sound.score_reasons || []);
 
@@ -1160,9 +1476,9 @@ function triggerPreviewDownload(sound, nameOverride = null, options = {}) {
   setStatus(`프리뷰 다운로드 시작: ${nameOverride || sound.name} · 라이선스 확인은 원본 페이지 기준입니다.`);
 }
 
-function triggerOriginalDownload(sound, nameOverride = null) {
+function triggerOriginalDownload(sound, nameOverride = null, options = {}) {
   const link = document.createElement("a");
-  link.href = freesoundOriginalDownloadUrl(sound, nameOverride);
+  link.href = freesoundOriginalDownloadUrl(sound, nameOverride, options);
   link.download = "";
   document.body.append(link);
   link.click();
@@ -1177,7 +1493,7 @@ function requestDownload(sound, nameOverride = null, options = {}) {
   }
   if (isFreesoundSound(sound)) {
     if (freesoundAuthStatus.logged_in) {
-      triggerOriginalDownload(sound, nameOverride);
+      triggerOriginalDownload(sound, nameOverride, options);
       return;
     }
     openDownloadChoiceModal({ type: "sound", sound, nameOverride, options });
@@ -1492,16 +1808,73 @@ function formatTime(value) {
   return `${value.toFixed(2)}초`;
 }
 
-function renderResults(results) {
+function renderResults(results, suggestions = []) {
   resultsEl.replaceChildren();
   cardContexts.clear();
   if (results.length === 0) {
     resultsEl.append(emptyState("검색 결과가 없습니다."));
+  } else {
+    for (const sound of results) {
+      resultsEl.append(renderSoundCard(sound));
+    }
+  }
+  if (results.length <= 5) {
+    renderSearchGuidance(results.length, suggestions);
+  }
+}
+
+function renderSearchGuidance(resultCount, suggestions) {
+  const filtered = normalizeSuggestions(suggestions);
+  if (resultCount > 0 && filtered.length === 0) {
     return;
   }
-  for (const sound of results) {
-    resultsEl.append(renderSoundCard(sound));
+  const panel = document.createElement("aside");
+  panel.className = "result-suggestions";
+  const title = document.createElement("h3");
+  title.textContent = resultCount === 0 ? "검색 조건을 조금 넓혀보세요" : "결과가 적을 때 시도할 방법";
+  const description = document.createElement("p");
+  description.textContent = resultCount === 0
+    ? "길이, 출처, 라이선스 조건이 좁거나 검색어가 감각적인 표현에 가까우면 결과가 없을 수 있습니다."
+    : "현재 검색 결과가 적습니다. 조건을 넓히거나 비슷하지만 다른 검색어를 입력해볼 수 있습니다.";
+  const actions = document.createElement("div");
+  actions.className = "result-guidance-actions";
+  actions.append(
+    guidanceButton("길이 범위 넓히기", () => {
+      document.querySelector("#min-duration").value = "0";
+      const maxDurationInput = document.querySelector("#max-duration");
+      maxDurationInput.value = String(Math.max(10, formNumber("#max-duration", 3)));
+      setStatus("길이 조건을 0초부터 최소 10초까지 넓혔습니다. 검색 버튼으로 다시 확인하세요.");
+    }),
+    guidanceButton("출처 전체로 변경", () => {
+      document.querySelector("#source-filter").value = "all";
+      setStatus("출처를 전체로 바꿨습니다. 검색 버튼으로 다시 확인하세요.");
+    }),
+    guidanceButton("라이선스 전체로 변경", () => {
+      document.querySelector("#license").value = "any";
+      setStatus("라이선스 조건을 전체로 바꿨습니다. 검색 버튼으로 다시 확인하세요.");
+    })
+  );
+  const chipWrap = document.createElement("div");
+  chipWrap.className = "result-suggestion-chips";
+  panel.append(title, description, actions);
+  if (filtered.length > 0) {
+    panel.append(chipWrap);
+    renderSuggestionPanel(chipWrap, filtered, {
+      title: "추천 검색어",
+      emptyHidden: true,
+      statusPrefix: "하단 추천 검색어 입력",
+    });
   }
+  resultsEl.append(panel);
+}
+
+function guidanceButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "guidance-button";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
 }
 
 function isHelpDemoActive() {
@@ -1514,6 +1887,7 @@ function enterHelpDemo() {
   }
   helpDemoSnapshot = {
     lastResults: cloneData(lastResults),
+    lastResultSuggestions: cloneData(lastResultSuggestions),
     savedSounds: cloneData(savedSounds),
     savedFolders: cloneData(savedFolders),
     status: statusEl.textContent,
@@ -1530,6 +1904,7 @@ function enterHelpDemo() {
   savedCc0Input.checked = false;
   savedGoodInput.checked = false;
   lastResults = cloneData(HELP_DEMO_RESULTS);
+  lastResultSuggestions = [];
   savedFolders = cloneData(HELP_DEMO_FOLDERS);
   savedSounds = cloneData(HELP_DEMO_SAVED);
   applySavedPanelCollapsed(false);
@@ -1548,6 +1923,7 @@ function exitHelpDemo() {
   helpDemoSnapshot = null;
   document.body.classList.remove("is-help-demo");
   lastResults = cloneData(snapshot.lastResults);
+  lastResultSuggestions = cloneData(snapshot.lastResultSuggestions || []);
   savedSounds = cloneData(snapshot.savedSounds);
   savedFolders = cloneData(snapshot.savedFolders);
   savedFilterInput.value = snapshot.savedFilter;
@@ -1555,7 +1931,7 @@ function exitHelpDemo() {
   savedCc0Input.checked = snapshot.savedCc0;
   savedGoodInput.checked = snapshot.savedGood;
   applySavedPanelCollapsed(snapshot.panelCollapsed);
-  renderResults(lastResults);
+  renderCurrentResults();
   renderSaved();
   syncRenderedSaveStates();
   setStatus(snapshot.status || "도움말을 종료했습니다.");
@@ -1585,7 +1961,7 @@ async function autoAnalyzeTopResults() {
     return;
   }
 
-  const targets = lastResults.filter((sound) => sound.preview_url).slice(0, 5);
+  const targets = sortedSearchResults().filter((sound) => sound.preview_url).slice(0, 5);
   if (targets.length === 0) {
     return;
   }
@@ -1928,7 +2304,9 @@ function renderSavedItemActions(sound, defaultDownloadName, item) {
     downloadButton.disabled = true;
   } else {
     downloadButton.addEventListener("click", () =>
-      requestDownload(sound, downloadDisplayName(sound, defaultDownloadName))
+      requestDownload(sound, downloadDisplayName(sound, defaultDownloadName), {
+        preferName: true,
+      })
     );
   }
   actions.append(downloadButton);
@@ -2082,6 +2460,19 @@ function emptyState(text) {
   return node;
 }
 
+function searchInterpretationText(data) {
+  const concepts = Array.isArray(data.interpreted_concepts) ? data.interpreted_concepts : [];
+  const negativeConcepts = Array.isArray(data.negative_concepts) ? data.negative_concepts : [];
+  const parts = [];
+  if (concepts.length > 0) {
+    parts.push(`해석: ${concepts.slice(0, 6).join(", ")}`);
+  }
+  if (negativeConcepts.length > 0) {
+    parts.push(`제외: ${negativeConcepts.slice(0, 4).join(", ")}`);
+  }
+  return parts.join(" · ");
+}
+
 async function searchSounds(event) {
   event.preventDefault();
   const payload = buildSearchPayload();
@@ -2098,17 +2489,24 @@ async function searchSounds(event) {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    nextSearchSequence();
     lastResults = data.results;
-    renderResults(lastResults);
+    lastResultSuggestions = data.suggested_queries || [];
+    renderCurrentResults();
     rememberSearch(payload.prompt);
     const warningText =
       data.source_warnings && data.source_warnings.length
         ? ` · ${data.source_warnings.join(" · ")}`
         : "";
-    setStatus(`검색식: ${data.query} · 후보 ${lastResults.length}개${warningText}`);
+    const interpretationText = searchInterpretationText(data);
+    const queryText = interpretationText
+      ? `${interpretationText} · 실제 검색식: ${data.query}`
+      : `검색식: ${data.query}`;
+    setStatus(`${queryText} · 후보 ${lastResults.length}개${warningText}`);
     await autoAnalyzeTopResults();
   } catch (error) {
     setStatus(`검색 실패: ${translateError(error.message)}`);
+    lastResultSuggestions = [];
     renderResults([]);
   }
 }
@@ -2897,6 +3295,11 @@ function initializeDownloadChoiceModal() {
 }
 
 form.addEventListener("submit", searchSounds);
+promptInput.addEventListener("input", scheduleLiveSearchSuggestions);
+resultSortSelect?.addEventListener("change", () => {
+  renderCurrentResults();
+  setStatus(`결과 정렬 변경: ${resultSortSelect.selectedOptions[0]?.textContent || "점수순"}`);
+});
 refreshSavedButton.addEventListener("click", loadSavedSounds);
 savedPanelToggle.addEventListener("click", () => {
   const collapsed = !workspaceLayout.classList.contains("is-saved-panel-collapsed");
@@ -2937,6 +3340,7 @@ handleFreesoundLoginRedirect();
 initializeHelpTour();
 initializeTooltips();
 initializeDownloadChoiceModal();
+initializeRecentListenWindow();
 applySavedPanelCollapsed(readSavedPanelCollapsed());
 renderSearchMemory();
 loadProviderStatus();
