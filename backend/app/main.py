@@ -15,6 +15,7 @@ from starlette.background import BackgroundTask
 
 from backend.app.config import Settings, get_settings
 from backend.app.db import (
+    DEFAULT_WORKSPACE_ID,
     create_saved_folder,
     delete_saved_folder,
     delete_saved_sound,
@@ -127,7 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(index_path)
 
     @app.post("/api/search", response_model=SearchResponse)
-    async def search_sounds(request: SearchRequest) -> SearchResponse:
+    async def search_sounds(request: SearchRequest, fastapi_request: Request) -> SearchResponse:
         if request.max_duration < request.min_duration:
             raise HTTPException(
                 status_code=422,
@@ -165,6 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 active_settings.database_path,
                 result,
                 analysis=analysis,
+                workspace_id=_workspace_id(fastapi_request),
             )
             reasons = list(result.score_reasons)
             if adjustment > 0:
@@ -198,12 +200,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/saved-sounds", response_model=SavedSound)
     def create_saved_sound(sound: SoundSearchResult, fastapi_request: Request) -> SavedSound:
         request_settings: Settings = fastapi_request.app.state.settings
-        return save_sound(request_settings.database_path, sound)
+        return save_sound(
+            request_settings.database_path,
+            sound,
+            workspace_id=_workspace_id(fastapi_request),
+        )
 
     @app.get("/api/saved-sounds", response_model=list[SavedSound])
     def get_saved_sounds(fastapi_request: Request) -> list[SavedSound]:
         request_settings: Settings = fastapi_request.app.state.settings
-        return list_saved_sounds(request_settings.database_path)
+        return list_saved_sounds(
+            request_settings.database_path,
+            workspace_id=_workspace_id(fastapi_request),
+        )
 
     @app.patch("/api/saved-sounds/{saved_id}", response_model=SavedSound)
     def patch_saved_sound(
@@ -212,7 +221,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fastapi_request: Request,
     ) -> SavedSound:
         request_settings: Settings = fastapi_request.app.state.settings
-        saved = update_saved_sound(request_settings.database_path, saved_id, update)
+        saved = update_saved_sound(
+            request_settings.database_path,
+            saved_id,
+            update,
+            workspace_id=_workspace_id(fastapi_request),
+        )
         if saved is None:
             raise HTTPException(status_code=404, detail="Saved sound was not found.")
         return saved
@@ -220,14 +234,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete("/api/saved-sounds/{saved_id}", status_code=204)
     def remove_saved_sound(saved_id: int, fastapi_request: Request) -> None:
         request_settings: Settings = fastapi_request.app.state.settings
-        deleted = delete_saved_sound(request_settings.database_path, saved_id)
+        deleted = delete_saved_sound(
+            request_settings.database_path,
+            saved_id,
+            workspace_id=_workspace_id(fastapi_request),
+        )
         if not deleted:
             raise HTTPException(status_code=404, detail="Saved sound was not found.")
 
     @app.get("/api/saved-folders", response_model=list[SavedFolder])
     def get_saved_folders(fastapi_request: Request) -> list[SavedFolder]:
         request_settings: Settings = fastapi_request.app.state.settings
-        return list_saved_folders(request_settings.database_path)
+        return list_saved_folders(
+            request_settings.database_path,
+            workspace_id=_workspace_id(fastapi_request),
+        )
 
     @app.post("/api/saved-folders", response_model=SavedFolder)
     def post_saved_folder(
@@ -236,7 +257,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> SavedFolder:
         request_settings: Settings = fastapi_request.app.state.settings
         try:
-            return create_saved_folder(request_settings.database_path, folder.name)
+            return create_saved_folder(
+                request_settings.database_path,
+                folder.name,
+                workspace_id=_workspace_id(fastapi_request),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -252,6 +277,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request_settings.database_path,
                 folder_id,
                 folder.name,
+                workspace_id=_workspace_id(fastapi_request),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -262,7 +288,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete("/api/saved-folders/{folder_id}", status_code=204)
     def remove_saved_folder(folder_id: int, fastapi_request: Request) -> None:
         request_settings: Settings = fastapi_request.app.state.settings
-        deleted = delete_saved_folder(request_settings.database_path, folder_id)
+        deleted = delete_saved_folder(
+            request_settings.database_path,
+            folder_id,
+            workspace_id=_workspace_id(fastapi_request),
+        )
         if not deleted:
             raise HTTPException(status_code=404, detail="Saved folder was not found.")
 
@@ -273,9 +303,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         saved_ids: str | None = None,
     ) -> FileResponse:
         request_settings: Settings = fastapi_request.app.state.settings
+        workspace_id = _workspace_id(fastapi_request)
         folder_name = _folder_name_for_download(
             request_settings.database_path,
             folder_id,
+            workspace_id,
         )
         if folder_name is None:
             raise HTTPException(status_code=404, detail="Saved folder was not found.")
@@ -285,6 +317,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             folder_id,
             folder_name,
             saved_ids,
+            workspace_id,
         )
         return FileResponse(
             archive_path,
@@ -366,7 +399,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/feedback", response_model=FeedbackResponse)
     def create_feedback(feedback: FeedbackRequest, fastapi_request: Request) -> FeedbackResponse:
         request_settings: Settings = fastapi_request.app.state.settings
-        return save_feedback(request_settings.database_path, feedback)
+        return save_feedback(
+            request_settings.database_path,
+            feedback,
+            workspace_id=_workspace_id(fastapi_request),
+        )
 
     return app
 
@@ -499,10 +536,18 @@ def _dedupe_results(results: list[SoundSearchResult]) -> list[SoundSearchResult]
     return [item[2] for item in sorted(best.values(), key=lambda value: value[1])]
 
 
-def _folder_name_for_download(database_path, folder_id: int) -> str | None:
+def _workspace_id(request: Request) -> str:
+    raw = request.headers.get("X-SoundScrapper-Workspace", DEFAULT_WORKSPACE_ID)
+    normalized = "".join(
+        character for character in raw.strip() if character.isalnum() or character in "._-"
+    )
+    return normalized[:80] or DEFAULT_WORKSPACE_ID
+
+
+def _folder_name_for_download(database_path, folder_id: int, workspace_id: str) -> str | None:
     if folder_id == 0:
         return ""
-    for folder in list_saved_folders(database_path):
+    for folder in list_saved_folders(database_path, workspace_id=workspace_id):
         if folder.folder_id == folder_id:
             return folder.name
     return None
@@ -513,11 +558,12 @@ async def _build_saved_folder_archive(
     folder_id: int,
     folder_name: str,
     saved_ids: str | None = None,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
 ):
     folder_label = folder_name or "미분류"
     saved_sounds = [
         sound
-        for sound in list_saved_sounds(settings.database_path)
+        for sound in list_saved_sounds(settings.database_path, workspace_id=workspace_id)
         if (sound.folder or "").strip() == folder_name
     ]
     saved_sounds = _apply_saved_id_order(saved_sounds, saved_ids)

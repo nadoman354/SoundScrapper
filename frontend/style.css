@@ -398,7 +398,9 @@ select {
   top: 18px;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
+  height: calc(100vh - 36px);
   max-height: calc(100vh - 36px);
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1001,7 +1003,7 @@ audio {
   display: grid;
   gap: 12px;
   min-height: 0;
-  max-height: calc(100vh - 265px);
+  max-height: none;
   overflow-y: auto;
   padding-right: 3px;
 }
@@ -1082,6 +1084,13 @@ audio {
   gap: 8px;
 }
 
+.saved-folder-name {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+}
+
 .saved-folder-title strong {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1105,9 +1114,33 @@ audio {
   gap: 5px;
 }
 
+.folder-rename-button {
+  width: 25px;
+  min-width: 25px;
+  height: 25px;
+  min-height: 25px;
+  border-color: #dbe4ef;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #475569;
+  padding: 0;
+}
+
+.folder-rename-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
 .saved-folder-body {
   display: grid;
   gap: 9px;
+  max-height: none;
+  overflow: visible;
   border-top: 1px solid #e2e8f0;
   background: #f8fafc;
   padding: 9px;
@@ -1144,23 +1177,58 @@ audio {
 }
 
 .saved-item-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .saved-title-block {
   display: grid;
   min-width: 0;
   gap: 4px;
+  overflow: hidden;
 }
 
-.saved-item strong {
+.saved-title {
+  display: block;
   min-width: 0;
   line-height: 1.28;
-  overflow-wrap: anywhere;
-  word-break: keep-all;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.saved-title-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.saved-title:hover .saved-title-text,
+.saved-title:focus .saved-title-text {
+  max-width: none;
+  overflow: visible;
+  animation: saved-title-marquee 7s linear infinite;
+}
+
+@keyframes saved-title-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+
+  48%,
+  64% {
+    transform: translateX(-35%);
+  }
+
+  100% {
+    transform: translateX(0);
+  }
 }
 
 .saved-item span,
@@ -1330,10 +1398,10 @@ audio {
 }
 
 .saved-item-actions .icon-button {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
   border-color: #cbd5e1;
   font-size: 0;
   padding: 0;
@@ -1353,8 +1421,9 @@ audio {
 .saved-rating-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
 }
 
 .saved-rating-row > span {
@@ -1365,14 +1434,36 @@ audio {
 
 .saved-rating-scale {
   display: inline-flex;
-  gap: 4px;
+  gap: 3px;
+}
+
+.saved-rating-row.is-readonly {
+  pointer-events: none;
+}
+
+.saved-rating-chip {
+  flex: 0 0 auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  padding: 6px 8px;
+}
+
+.saved-rating-chip.is-rated {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
 }
 
 .saved-rating-scale button {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 24px;
+  min-width: 24px;
+  height: 26px;
+  min-height: 26px;
   border: 1px solid #dbe4ef;
   border-radius: 999px;
   background: #ffffff;
@@ -1387,6 +1478,22 @@ audio {
   border-color: #f97316;
   background: #fff7ed;
   color: #9a3412;
+}
+
+.saved-note-box {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 8px 9px;
+}
+
+.saved-note-label {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .saved-note-summary {
@@ -1415,10 +1522,13 @@ audio {
   position: absolute;
   right: 9px;
   bottom: 9px;
+  border-color: #9fd3cc;
+  background: #ecfdf5;
+  color: #0f766e;
 }
 
 .saved-item.is-collapsed {
-  padding-bottom: 44px;
+  padding-bottom: 10px;
 }
 
 .saved-item.is-collapsed .saved-meta,
@@ -1427,12 +1537,15 @@ audio {
   display: none;
 }
 
-.saved-item.is-collapsed .saved-rating-row {
-  justify-content: flex-end;
+.saved-item.is-collapsed .saved-note-box {
+  min-height: 42px;
+  margin-right: 40px;
+  padding: 7px 8px;
 }
 
 .saved-item.is-collapsed .saved-mini-play {
   display: inline-grid;
+  bottom: 13px;
 }
 
 .empty {
@@ -1473,7 +1586,9 @@ audio {
 
   .saved-panel {
     position: static;
+    height: auto;
     max-height: none;
+    min-height: 0;
     overflow: visible;
   }
 

@@ -319,6 +319,91 @@ def test_saved_folders_rename_and_delete_move_sounds_safely(tmp_path: Path) -> N
     assert listed_after_delete[0].folder == ""
 
 
+def test_saved_sounds_are_scoped_by_workspace(tmp_path: Path) -> None:
+    database_path = tmp_path / "workspace-saved.db"
+    owner_sound = SoundSearchResult(id=301, name="Owner Click", score=80)
+    guest_sound = SoundSearchResult(id=301, name="Guest Click", score=65)
+
+    owner_saved = save_sound(database_path, owner_sound, workspace_id="owner")
+    guest_saved = save_sound(database_path, guest_sound, workspace_id="guest")
+
+    assert owner_saved.saved_id != guest_saved.saved_id
+    assert [sound.name for sound in list_saved_sounds(database_path, workspace_id="owner")] == [
+        "Owner Click"
+    ]
+    assert [sound.name for sound in list_saved_sounds(database_path, workspace_id="guest")] == [
+        "Guest Click"
+    ]
+
+    assert (
+        update_saved_sound(
+            database_path,
+            owner_saved.saved_id,
+            SavedSoundUpdate(note="wrong workspace"),
+            workspace_id="guest",
+        )
+        is None
+    )
+    assert delete_saved_sound(database_path, owner_saved.saved_id, workspace_id="guest") is False
+    assert delete_saved_sound(database_path, owner_saved.saved_id, workspace_id="owner") is True
+    assert list_saved_sounds(database_path, workspace_id="owner") == []
+    assert len(list_saved_sounds(database_path, workspace_id="guest")) == 1
+
+
+def test_saved_folders_are_scoped_by_workspace(tmp_path: Path) -> None:
+    database_path = tmp_path / "workspace-folders.db"
+    owner_folder = create_saved_folder(database_path, "UI", workspace_id="owner")
+    guest_folder = create_saved_folder(database_path, "UI", workspace_id="guest")
+    owner_saved = save_sound(database_path, SoundSearchResult(id=401, name="Owner"), "owner")
+    guest_saved = save_sound(database_path, SoundSearchResult(id=402, name="Guest"), "guest")
+
+    update_saved_sound(
+        database_path,
+        owner_saved.saved_id,
+        SavedSoundUpdate(folder="UI"),
+        workspace_id="owner",
+    )
+    update_saved_sound(
+        database_path,
+        guest_saved.saved_id,
+        SavedSoundUpdate(folder="UI"),
+        workspace_id="guest",
+    )
+
+    assert owner_folder.folder_id != guest_folder.folder_id
+    assert list_saved_folders(database_path, workspace_id="owner")[0].sound_count == 1
+    assert list_saved_folders(database_path, workspace_id="guest")[0].sound_count == 1
+
+    assert rename_saved_folder(database_path, owner_folder.folder_id, "Menus", "guest") is None
+    renamed = rename_saved_folder(database_path, owner_folder.folder_id, "Menus", "owner")
+    assert renamed is not None
+    assert renamed.name == "Menus"
+    assert list_saved_sounds(database_path, workspace_id="owner")[0].folder == "Menus"
+    assert list_saved_sounds(database_path, workspace_id="guest")[0].folder == "UI"
+
+    assert delete_saved_folder(database_path, renamed.folder_id, workspace_id="guest") is False
+    assert delete_saved_folder(database_path, renamed.folder_id, workspace_id="owner") is True
+    assert list_saved_sounds(database_path, workspace_id="owner")[0].folder == ""
+    assert list_saved_sounds(database_path, workspace_id="guest")[0].folder == "UI"
+
+
+def test_feedback_adjustment_is_scoped_by_workspace(tmp_path: Path) -> None:
+    database_path = tmp_path / "workspace-feedback.db"
+    sound = SoundSearchResult(id=501, name="Clean Sword", tags=["sword"], score=75)
+    feedback = FeedbackRequest(
+        id=501,
+        prompt="sword",
+        feedback_type="good",
+        name="Clean Sword",
+        tags=["sword"],
+    )
+
+    save_feedback(database_path, feedback, workspace_id="owner")
+
+    assert feedback_adjustment(database_path, sound, workspace_id="owner") > 0
+    assert feedback_adjustment(database_path, sound, workspace_id="guest") == 0
+
+
 def test_delete_saved_sound_removes_only_saved_candidate(tmp_path: Path) -> None:
     database_path = tmp_path / "delete-saved.db"
     first = save_sound(database_path, SoundSearchResult(id=13, name="Keep"))
@@ -387,6 +472,36 @@ def test_api_health_and_saved_sounds(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert client.get("/api/saved-sounds").json()[0]["id"] == 20
+
+
+def test_api_saved_sounds_are_scoped_by_workspace_header(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "api-workspace.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    owner_headers = {"X-SoundScrapper-Workspace": "owner"}
+    guest_headers = {"X-SoundScrapper-Workspace": "guest"}
+
+    response = client.post(
+        "/api/saved-sounds",
+        headers=owner_headers,
+        json={
+            "id": 33,
+            "name": "Private Hit",
+            "license": "Creative Commons 0",
+            "duration": 0.4,
+            "score": 92,
+        },
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/saved-sounds", headers=guest_headers).json() == []
+    assert client.get("/api/saved-folders", headers=guest_headers).json() == []
+    assert client.get("/api/saved-sounds", headers=owner_headers).json()[0]["name"] == "Private Hit"
 
 
 def test_api_updates_and_deletes_saved_sound_metadata(tmp_path: Path) -> None:

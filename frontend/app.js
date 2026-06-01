@@ -27,6 +27,7 @@ const RECENT_SEARCHES_KEY = "soundscrapper.recentSearches";
 const FAVORITE_SEARCHES_KEY = "soundscrapper.favoriteSearches";
 const SAVED_FOLDER_STATE_KEY = "soundscrapper.savedFolderState";
 const SAVED_COLLAPSE_STATE_KEY = "soundscrapper.savedCollapseState";
+const WORKSPACE_ID_KEY = "soundscrapper.workspaceId";
 
 const LICENSE_LABELS = {
   "creative commons 0": "CC0",
@@ -269,9 +270,14 @@ function setupSearchModeConflicts() {
 }
 
 async function apiFetch(url, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    "X-SoundScrapper-Workspace": workspaceId(),
+    ...(options.headers || {}),
+  };
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
 
   if (!response.ok) {
@@ -291,6 +297,19 @@ async function apiFetch(url, options = {}) {
 
   const text = await response.text();
   return text ? JSON.parse(text) : null;
+}
+
+function workspaceId() {
+  let value = localStorage.getItem(WORKSPACE_ID_KEY);
+  if (value) {
+    return value;
+  }
+
+  value =
+    globalThis.crypto?.randomUUID?.() ||
+    `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  localStorage.setItem(WORKSPACE_ID_KEY, value);
+  return value;
 }
 
 function translateError(message) {
@@ -350,10 +369,11 @@ function iconMarkup(name) {
     trash:
       '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 15h10l1-15"></path>',
     pencil:
-      '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"></path><path d="M13.5 7.5l3 3"></path><path d="M3 3h18v18H3z"></path>',
+      '<rect x="4" y="4" width="16" height="16" rx="4"></rect><path d="M8 16l.7-3.2 7-7a1.7 1.7 0 0 1 2.4 2.4l-7 7L8 16Z"></path><path d="M14.7 6.8l2.5 2.5"></path>',
     collapse: '<path d="M6 9h12"></path><path d="m8 15 4-4 4 4"></path>',
     expand: '<path d="M6 15h12"></path><path d="m8 9 4 4 4-4"></path>',
     play: '<path d="m8 5 11 7-11 7V5Z"></path>',
+    pause: '<path d="M8 5h3v14H8z"></path><path d="M13 5h3v14h-3z"></path>',
     grip: '<path d="M9 5h.01"></path><path d="M15 5h.01"></path><path d="M9 12h.01"></path><path d="M15 12h.01"></path><path d="M9 19h.01"></path><path d="M15 19h.01"></path>',
     plus: '<path d="M12 5v14"></path><path d="M5 12h14"></path>',
     archive: '<path d="M4 4h16v4H4z"></path><path d="M6 8v12h12V8"></path><path d="M10 12h4"></path>',
@@ -1229,11 +1249,23 @@ function renderSavedFolderSummary(group) {
   const summary = document.createElement("summary");
   const title = document.createElement("div");
   title.className = "saved-folder-title";
+  const nameWrap = document.createElement("span");
+  nameWrap.className = "saved-folder-name";
   const name = document.createElement("strong");
   name.textContent = group.label;
+  nameWrap.append(name);
+  if (group.folder_id) {
+    const renameButton = iconButton("폴더 이름 변경", "pencil", "folder-rename-button");
+    renameButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      renameSavedFolderPrompt(group);
+    });
+    nameWrap.append(renameButton);
+  }
   const count = document.createElement("span");
   count.textContent = `${group.sounds.length}개`;
-  title.append(name, count);
+  title.append(nameWrap, count);
 
   const actions = document.createElement("div");
   actions.className = "saved-folder-actions";
@@ -1242,22 +1274,18 @@ function renderSavedFolderSummary(group) {
   downloadButton.disabled = !group.sounds.some(
     (sound) => sound.download_allowed && (sound.download_url || sound.preview_url)
   );
-  downloadButton.addEventListener("click", (event) => {
+  downloadButton.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
-    triggerFolderDownload(group);
+    try {
+      await triggerFolderDownload(group);
+    } catch (error) {
+      setStatus(`폴더 다운로드 실패: ${translateError(error.message)}`);
+    }
   });
   actions.append(downloadButton);
 
   if (group.folder_id) {
-    const renameButton = iconButton("폴더 이름 변경", "pencil");
-    renameButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      renameSavedFolderPrompt(group);
-    });
-    actions.append(renameButton);
-
     const deleteButton = iconButton("폴더 삭제", "trash", "icon-button danger-button");
     deleteButton.addEventListener("click", (event) => {
       event.preventDefault();
@@ -1320,13 +1348,23 @@ function renderSavedItem(sound, defaultDownloadName) {
   const titleBlock = document.createElement("div");
   titleBlock.className = "saved-title-block";
   const title = document.createElement("strong");
-  title.textContent = sound.name;
+  title.className = "saved-title";
+  title.title = sound.name;
+  title.tabIndex = 0;
+  const titleText = document.createElement("span");
+  titleText.className = "saved-title-text";
+  titleText.textContent = sound.name;
+  title.append(titleText);
   const meta = document.createElement("span");
   meta.className = "saved-meta";
   meta.textContent =
     `${sourceLabel(sound.source_provider)} · ${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
   titleBlock.append(title, meta);
-  header.append(titleBlock, renderSavedItemActions(sound, defaultDownloadName, item));
+  header.append(
+    titleBlock,
+    renderSavedRatingControl(sound, isCollapsed),
+    renderSavedItemActions(sound, defaultDownloadName, item)
+  );
 
   item.append(handle, header);
 
@@ -1342,23 +1380,14 @@ function renderSavedItem(sound, defaultDownloadName) {
   } else {
     audioWrap.append(emptyState("미리듣기 없음"));
   }
-  item.append(audioWrap, renderSavedRatingControl(sound), renderSavedNoteSummary(sound));
+  item.append(audioWrap, renderSavedNoteSummary(sound));
 
   const editor = renderSavedEditor(sound, defaultDownloadName);
   item.append(editor);
 
   const miniPlay = iconButton("간단 재생", "play", "saved-mini-play");
   miniPlay.disabled = !audio;
-  miniPlay.addEventListener("click", () => {
-    if (!audio) {
-      return;
-    }
-    if (audio.paused) {
-      audio.play().catch(() => {});
-    } else {
-      audio.pause();
-    }
-  });
+  setupMiniPlayButton(miniPlay, audio);
   item.append(miniPlay);
   return item;
 }
@@ -1377,10 +1406,7 @@ function renderSavedItemActions(sound, defaultDownloadName, item) {
     const nextCollapsed = !item.classList.contains("is-collapsed");
     state[key] = nextCollapsed;
     writeSavedCollapseState(state);
-    item.classList.toggle("is-collapsed", nextCollapsed);
-    collapseButton.title = nextCollapsed ? "펼치기" : "최소화";
-    collapseButton.setAttribute("aria-label", nextCollapsed ? "펼치기" : "최소화");
-    collapseButton.innerHTML = iconMarkup(nextCollapsed ? "expand" : "collapse");
+    renderSaved();
   });
   actions.append(collapseButton);
 
@@ -1408,11 +1434,21 @@ function renderSavedItemActions(sound, defaultDownloadName, item) {
   return actions;
 }
 
-function renderSavedRatingControl(sound) {
+function renderSavedRatingControl(sound, isCollapsed = false) {
   const row = document.createElement("div");
   row.className = "saved-rating-row";
+  row.classList.toggle("is-readonly", isCollapsed);
   const label = document.createElement("span");
   label.textContent = "적합도";
+  if (isCollapsed) {
+    const chip = document.createElement("span");
+    chip.className = "saved-rating-chip";
+    chip.classList.toggle("is-rated", Boolean(sound.fit_rating));
+    chip.textContent = sound.fit_rating ? String(sound.fit_rating) : "미평가";
+    row.append(label, chip);
+    return row;
+  }
+
   const scale = document.createElement("div");
   scale.className = "saved-rating-scale";
   for (let value = 1; value <= 5; value += 1) {
@@ -1434,10 +1470,42 @@ function renderSavedRatingControl(sound) {
 }
 
 function renderSavedNoteSummary(sound) {
+  const box = document.createElement("div");
+  box.className = "saved-note-box";
+  const label = document.createElement("span");
+  label.className = "saved-note-label";
+  label.textContent = "메모";
   const summary = document.createElement("p");
   summary.className = "saved-note-summary";
   summary.textContent = (sound.note || "").trim() || "메모 없음";
-  return summary;
+  box.append(label, summary);
+  return box;
+}
+
+function setupMiniPlayButton(button, audio) {
+  if (!audio) {
+    setMiniPlayState(button, false);
+    return;
+  }
+
+  button.addEventListener("click", () => {
+    if (audio.paused) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  });
+  audio.addEventListener("play", () => setMiniPlayState(button, true));
+  audio.addEventListener("pause", () => setMiniPlayState(button, false));
+  audio.addEventListener("ended", () => setMiniPlayState(button, false));
+  setMiniPlayState(button, !audio.paused);
+}
+
+function setMiniPlayState(button, isPlaying) {
+  button.classList.toggle("is-playing", isPlaying);
+  button.title = isPlaying ? "일시정지" : "간단 재생";
+  button.setAttribute("aria-label", isPlaying ? "일시정지" : "간단 재생");
+  button.innerHTML = iconMarkup(isPlaying ? "pause" : "play");
 }
 
 function renderSavedEditor(sound, defaultDownloadName) {
@@ -1622,16 +1690,30 @@ async function deleteSavedFolder(folderId) {
   });
 }
 
-function triggerFolderDownload(group) {
-  const link = document.createElement("a");
+async function triggerFolderDownload(group) {
   const params = new URLSearchParams({
     saved_ids: group.sounds.map((sound) => String(sound.saved_id)).join(","),
   });
-  link.href = `/api/saved-folders/${group.folder_id || 0}/download?${params.toString()}`;
-  link.download = "";
+  const response = await fetch(
+    `/api/saved-folders/${group.folder_id || 0}/download?${params.toString()}`,
+    {
+      headers: {
+        "X-SoundScrapper-Workspace": workspaceId(),
+      },
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `${group.label || "미분류"}.zip`;
   document.body.append(link);
   link.click();
   link.remove();
+  URL.revokeObjectURL(objectUrl);
   setStatus(`폴더 전체 다운로드 시작: ${group.label}`);
 }
 

@@ -14,11 +14,13 @@ from backend.app.schemas import (
     SoundSearchResult,
 )
 
+DEFAULT_WORKSPACE_ID = "local"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS saved_sounds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    freesound_id INTEGER NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL DEFAULT 'local',
+    freesound_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     username TEXT NOT NULL DEFAULT '',
     license TEXT NOT NULL DEFAULT '',
@@ -46,7 +48,8 @@ CREATE TABLE IF NOT EXISTS saved_sounds (
 
 CREATE TABLE IF NOT EXISTS saved_folders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL DEFAULT 'local',
+    name TEXT NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -71,6 +74,7 @@ CREATE TABLE IF NOT EXISTS sound_analyses (
 
 CREATE TABLE IF NOT EXISTS sound_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id TEXT NOT NULL DEFAULT 'local',
     freesound_id INTEGER NOT NULL,
     prompt TEXT NOT NULL DEFAULT '',
     feedback_type TEXT NOT NULL,
@@ -90,14 +94,23 @@ def initialize_db(database_path: Path) -> None:
         _ensure_analysis_duration_column(connection)
         _ensure_saved_source_columns(connection)
         _ensure_saved_metadata_columns(connection)
+        _ensure_workspace_columns(connection)
+        _rebuild_saved_sounds_if_needed(connection)
+        _rebuild_saved_folders_if_needed(connection)
+        _ensure_workspace_indexes(connection)
         _ensure_saved_folder_table(connection)
         _sync_existing_saved_folders(connection)
         _ensure_feedback_source_columns(connection)
         connection.commit()
 
 
-def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
+def save_sound(
+    database_path: Path,
+    sound: SoundSearchResult,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> SavedSound:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     tags = json.dumps(sound.tags, ensure_ascii=False)
     source_provider = sound.source_provider or "freesound"
     source_id = sound.source_id or str(sound.id)
@@ -107,13 +120,13 @@ def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
         connection.execute(
             """
             INSERT INTO saved_sounds (
-                freesound_id, name, username, license, duration, tags,
+                workspace_id, freesound_id, name, username, license, duration, tags,
                 preview_url, url, description, score, source_provider, source_id,
                 source_url, license_url, creator_url, attribution_text, download_url,
                 download_allowed
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source_provider, source_id) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, source_provider, source_id) DO UPDATE SET
                 freesound_id = excluded.freesound_id,
                 name = excluded.name,
                 username = excluded.username,
@@ -133,6 +146,7 @@ def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
                 saved_at = CURRENT_TIMESTAMP
             """,
             (
+                workspace_id,
                 sound.id,
                 sound.name,
                 sound.username,
@@ -161,20 +175,25 @@ def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
                 (
                     SELECT GROUP_CONCAT(DISTINCT feedback_type)
                     FROM sound_feedback
-                    WHERE sound_feedback.source_provider = saved_sounds.source_provider
+                    WHERE sound_feedback.workspace_id = saved_sounds.workspace_id
+                        AND sound_feedback.source_provider = saved_sounds.source_provider
                         AND sound_feedback.source_id = saved_sounds.source_id
                 ) AS feedback_types
             FROM saved_sounds
-            WHERE source_provider = ? AND source_id = ?
+            WHERE workspace_id = ? AND source_provider = ? AND source_id = ?
             """,
-            (source_provider, source_id),
+            (workspace_id, source_provider, source_id),
         ).fetchone()
 
     return _row_to_saved_sound(row)
 
 
-def list_saved_sounds(database_path: Path) -> list[SavedSound]:
+def list_saved_sounds(
+    database_path: Path,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> list[SavedSound]:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
@@ -184,12 +203,15 @@ def list_saved_sounds(database_path: Path) -> list[SavedSound]:
                 (
                     SELECT GROUP_CONCAT(DISTINCT feedback_type)
                     FROM sound_feedback
-                    WHERE sound_feedback.source_provider = saved_sounds.source_provider
+                    WHERE sound_feedback.workspace_id = saved_sounds.workspace_id
+                        AND sound_feedback.source_provider = saved_sounds.source_provider
                         AND sound_feedback.source_id = saved_sounds.source_id
                 ) AS feedback_types
             FROM saved_sounds
+            WHERE saved_sounds.workspace_id = ?
             ORDER BY saved_at DESC, id DESC
-            """
+            """,
+            (workspace_id,),
         ).fetchall()
 
     return [_row_to_saved_sound(row) for row in rows]
@@ -199,8 +221,10 @@ def update_saved_sound(
     database_path: Path,
     saved_id: int,
     update: SavedSoundUpdate,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
 ) -> SavedSound | None:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     fields_set = _model_fields_set(update)
     assignments: list[str] = []
     values: list[object] = []
@@ -227,10 +251,14 @@ def update_saved_sound(
         connection.row_factory = sqlite3.Row
         if assignments:
             if "folder" in fields_set and folder_name:
-                _ensure_folder_named(connection, folder_name)
-            values.append(saved_id)
+                _ensure_folder_named(connection, folder_name, workspace_id)
+            values.extend([saved_id, workspace_id])
             connection.execute(
-                f"UPDATE saved_sounds SET {', '.join(assignments)} WHERE id = ?",
+                f"""
+                UPDATE saved_sounds
+                SET {', '.join(assignments)}
+                WHERE id = ? AND workspace_id = ?
+                """,
                 values,
             )
             connection.commit()
@@ -242,28 +270,41 @@ def update_saved_sound(
                 (
                     SELECT GROUP_CONCAT(DISTINCT feedback_type)
                     FROM sound_feedback
-                    WHERE sound_feedback.source_provider = saved_sounds.source_provider
+                    WHERE sound_feedback.workspace_id = saved_sounds.workspace_id
+                        AND sound_feedback.source_provider = saved_sounds.source_provider
                         AND sound_feedback.source_id = saved_sounds.source_id
                 ) AS feedback_types
             FROM saved_sounds
-            WHERE id = ?
+            WHERE id = ? AND workspace_id = ?
             """,
-            (saved_id,),
+            (saved_id, workspace_id),
         ).fetchone()
 
     return _row_to_saved_sound(row) if row else None
 
 
-def delete_saved_sound(database_path: Path, saved_id: int) -> bool:
+def delete_saved_sound(
+    database_path: Path,
+    saved_id: int,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> bool:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     with sqlite3.connect(database_path) as connection:
-        cursor = connection.execute("DELETE FROM saved_sounds WHERE id = ?", (saved_id,))
+        cursor = connection.execute(
+            "DELETE FROM saved_sounds WHERE id = ? AND workspace_id = ?",
+            (saved_id, workspace_id),
+        )
         connection.commit()
         return cursor.rowcount > 0
 
 
-def list_saved_folders(database_path: Path) -> list[SavedFolder]:
+def list_saved_folders(
+    database_path: Path,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> list[SavedFolder]:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
@@ -275,92 +316,117 @@ def list_saved_folders(database_path: Path) -> list[SavedFolder]:
             LEFT JOIN (
                 SELECT folder, COUNT(*) AS sound_count
                 FROM saved_sounds
-                WHERE folder <> ''
+                WHERE workspace_id = ? AND folder <> ''
                 GROUP BY folder
             ) AS folder_counts
                 ON folder_counts.folder = saved_folders.name
+            WHERE saved_folders.workspace_id = ?
             ORDER BY saved_folders.sort_order ASC, LOWER(saved_folders.name) ASC
-            """
+            """,
+            (workspace_id, workspace_id),
         ).fetchall()
 
     return [_row_to_saved_folder(row) for row in rows]
 
 
-def create_saved_folder(database_path: Path, name: str) -> SavedFolder:
+def create_saved_folder(
+    database_path: Path,
+    name: str,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> SavedFolder:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     folder_name = _normalize_folder_name(name)
     if not folder_name:
         raise ValueError("Folder name is required.")
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
-        existing = _folder_row_by_name(connection, folder_name)
+        existing = _folder_row_by_name(connection, folder_name, workspace_id)
         if existing:
             return _row_to_saved_folder(existing)
 
         sort_order = connection.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_folders"
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_folders WHERE workspace_id = ?",
+            (workspace_id,),
         ).fetchone()[0]
         cursor = connection.execute(
-            "INSERT INTO saved_folders (name, sort_order) VALUES (?, ?)",
-            (folder_name, sort_order),
+            "INSERT INTO saved_folders (workspace_id, name, sort_order) VALUES (?, ?, ?)",
+            (workspace_id, folder_name, sort_order),
         )
         connection.commit()
-        row = _folder_row_by_id(connection, cursor.lastrowid)
+        row = _folder_row_by_id(connection, cursor.lastrowid, workspace_id)
 
     return _row_to_saved_folder(row)
 
 
-def rename_saved_folder(database_path: Path, folder_id: int, name: str) -> SavedFolder | None:
+def rename_saved_folder(
+    database_path: Path,
+    folder_id: int,
+    name: str,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> SavedFolder | None:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     folder_name = _normalize_folder_name(name)
     if not folder_name:
         raise ValueError("Folder name is required.")
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
-        current = _folder_row_by_id(connection, folder_id)
+        current = _folder_row_by_id(connection, folder_id, workspace_id)
         if not current:
             return None
 
         old_name = current["name"]
-        existing = _folder_row_by_name(connection, folder_name)
+        existing = _folder_row_by_name(connection, folder_name, workspace_id)
         if existing and existing["id"] != folder_id:
             connection.execute(
-                "UPDATE saved_sounds SET folder = ? WHERE folder = ?",
-                (folder_name, old_name),
+                "UPDATE saved_sounds SET folder = ? WHERE workspace_id = ? AND folder = ?",
+                (folder_name, workspace_id, old_name),
             )
-            connection.execute("DELETE FROM saved_folders WHERE id = ?", (folder_id,))
+            connection.execute(
+                "DELETE FROM saved_folders WHERE id = ? AND workspace_id = ?",
+                (folder_id, workspace_id),
+            )
             connection.commit()
-            row = _folder_row_by_id(connection, existing["id"])
+            row = _folder_row_by_id(connection, existing["id"], workspace_id)
             return _row_to_saved_folder(row)
 
         connection.execute(
-            "UPDATE saved_folders SET name = ? WHERE id = ?",
-            (folder_name, folder_id),
+            "UPDATE saved_folders SET name = ? WHERE id = ? AND workspace_id = ?",
+            (folder_name, folder_id, workspace_id),
         )
         connection.execute(
-            "UPDATE saved_sounds SET folder = ? WHERE folder = ?",
-            (folder_name, old_name),
+            "UPDATE saved_sounds SET folder = ? WHERE workspace_id = ? AND folder = ?",
+            (folder_name, workspace_id, old_name),
         )
         connection.commit()
-        row = _folder_row_by_id(connection, folder_id)
+        row = _folder_row_by_id(connection, folder_id, workspace_id)
 
     return _row_to_saved_folder(row)
 
 
-def delete_saved_folder(database_path: Path, folder_id: int) -> bool:
+def delete_saved_folder(
+    database_path: Path,
+    folder_id: int,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> bool:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
-        current = _folder_row_by_id(connection, folder_id)
+        current = _folder_row_by_id(connection, folder_id, workspace_id)
         if not current:
             return False
         connection.execute(
-            "UPDATE saved_sounds SET folder = '' WHERE folder = ?",
-            (current["name"],),
+            "UPDATE saved_sounds SET folder = '' WHERE workspace_id = ? AND folder = ?",
+            (workspace_id, current["name"]),
         )
-        cursor = connection.execute("DELETE FROM saved_folders WHERE id = ?", (folder_id,))
+        cursor = connection.execute(
+            "DELETE FROM saved_folders WHERE id = ? AND workspace_id = ?",
+            (folder_id, workspace_id),
+        )
         connection.commit()
         return cursor.rowcount > 0
 
@@ -433,8 +499,13 @@ def get_analysis(database_path: Path, freesound_id: int) -> SoundAnalysis | None
     return _row_to_analysis(row) if row else None
 
 
-def save_feedback(database_path: Path, feedback: FeedbackRequest) -> FeedbackResponse:
+def save_feedback(
+    database_path: Path,
+    feedback: FeedbackRequest,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> FeedbackResponse:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     tags = json.dumps(feedback.tags, ensure_ascii=False)
     source_provider = feedback.source_provider or "freesound"
     source_id = feedback.source_id or str(feedback.id)
@@ -445,15 +516,15 @@ def save_feedback(database_path: Path, feedback: FeedbackRequest) -> FeedbackRes
         if exclusive_types:
             connection.execute(
                 _delete_feedback_sql(len(exclusive_types)),
-                (source_provider, source_id, *exclusive_types),
+                (workspace_id, source_provider, source_id, *exclusive_types),
             )
 
         connection.execute(
             """
             DELETE FROM sound_feedback
-            WHERE source_provider = ? AND source_id = ? AND feedback_type = ?
+            WHERE workspace_id = ? AND source_provider = ? AND source_id = ? AND feedback_type = ?
             """,
-            (source_provider, source_id, feedback.feedback_type),
+            (workspace_id, source_provider, source_id, feedback.feedback_type),
         )
 
         if not feedback.active:
@@ -469,11 +540,13 @@ def save_feedback(database_path: Path, feedback: FeedbackRequest) -> FeedbackRes
         cursor = connection.execute(
             """
             INSERT INTO sound_feedback (
-                freesound_id, prompt, feedback_type, name, tags, source_provider, source_id
+                workspace_id, freesound_id, prompt, feedback_type, name, tags,
+                source_provider, source_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                workspace_id,
                 feedback.id,
                 feedback.prompt,
                 feedback.feedback_type,
@@ -502,8 +575,10 @@ def feedback_adjustment(
     database_path: Path,
     result: SoundSearchResult,
     analysis: SoundAnalysis | None = None,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
 ) -> int:
     initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
     tags = {tag.lower() for tag in result.tags}
     name_terms = {term for term in result.name.lower().replace("_", " ").split() if len(term) > 2}
     source_provider = result.source_provider or "freesound"
@@ -516,9 +591,9 @@ def feedback_adjustment(
             """
             SELECT feedback_type
             FROM sound_feedback
-            WHERE source_provider = ? AND source_id = ?
+            WHERE workspace_id = ? AND source_provider = ? AND source_id = ?
             """,
-            (source_provider, source_id),
+            (workspace_id, source_provider, source_id),
         ).fetchall()
         related_rows = connection.execute(
             """
@@ -537,9 +612,11 @@ def feedback_adjustment(
             FROM sound_feedback
             LEFT JOIN sound_analyses
                 ON sound_feedback.freesound_id = sound_analyses.freesound_id
+            WHERE sound_feedback.workspace_id = ?
             ORDER BY sound_feedback.created_at DESC
             LIMIT 120
-            """
+            """,
+            (workspace_id,),
         ).fetchall()
 
     for row in exact_rows:
@@ -734,7 +811,10 @@ def _delete_feedback_sql(type_count: int) -> str:
     placeholders = ", ".join("?" for _ in range(type_count))
     return f"""
         DELETE FROM sound_feedback
-        WHERE source_provider = ? AND source_id = ? AND feedback_type IN ({placeholders})
+        WHERE workspace_id = ?
+            AND source_provider = ?
+            AND source_id = ?
+            AND feedback_type IN ({placeholders})
     """
 
 
@@ -843,12 +923,6 @@ def _ensure_saved_source_columns(connection: sqlite3.Connection) -> None:
             download_url = COALESCE(download_url, preview_url)
         """
     )
-    connection.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS saved_sounds_source_identity
-        ON saved_sounds(source_provider, source_id)
-        """
-    )
 
 
 def _ensure_saved_metadata_columns(connection: sqlite3.Connection) -> None:
@@ -873,7 +947,8 @@ def _ensure_saved_folder_table(connection: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS saved_folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
+            workspace_id TEXT NOT NULL DEFAULT 'local',
+            name TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
@@ -884,36 +959,48 @@ def _ensure_saved_folder_table(connection: sqlite3.Connection) -> None:
 def _sync_existing_saved_folders(connection: sqlite3.Connection) -> None:
     rows = connection.execute(
         """
-        SELECT DISTINCT folder
+        SELECT DISTINCT workspace_id, folder
         FROM saved_sounds
         WHERE folder IS NOT NULL AND TRIM(folder) <> ''
+            AND workspace_id IS NOT NULL
         ORDER BY LOWER(folder)
         """
     ).fetchall()
     for row in rows:
-        _ensure_folder_named(connection, row[0])
+        _ensure_folder_named(connection, row[1], row[0])
 
 
-def _ensure_folder_named(connection: sqlite3.Connection, name: str) -> None:
+def _ensure_folder_named(
+    connection: sqlite3.Connection,
+    name: str,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> None:
+    workspace_id = _normalize_workspace_id(workspace_id)
     folder_name = _normalize_folder_name(name)
     if not folder_name:
         return
     existing = connection.execute(
-        "SELECT id FROM saved_folders WHERE name = ?",
-        (folder_name,),
+        "SELECT id FROM saved_folders WHERE workspace_id = ? AND name = ?",
+        (workspace_id, folder_name),
     ).fetchone()
     if existing:
         return
     sort_order = connection.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_folders"
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_folders WHERE workspace_id = ?",
+        (workspace_id,),
     ).fetchone()[0]
     connection.execute(
-        "INSERT INTO saved_folders (name, sort_order) VALUES (?, ?)",
-        (folder_name, sort_order),
+        "INSERT INTO saved_folders (workspace_id, name, sort_order) VALUES (?, ?, ?)",
+        (workspace_id, folder_name, sort_order),
     )
 
 
-def _folder_row_by_id(connection: sqlite3.Connection, folder_id: int) -> sqlite3.Row | None:
+def _folder_row_by_id(
+    connection: sqlite3.Connection,
+    folder_id: int,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> sqlite3.Row | None:
+    workspace_id = _normalize_workspace_id(workspace_id)
     return connection.execute(
         """
         SELECT
@@ -921,16 +1008,22 @@ def _folder_row_by_id(connection: sqlite3.Connection, folder_id: int) -> sqlite3
             (
                 SELECT COUNT(*)
                 FROM saved_sounds
-                WHERE saved_sounds.folder = saved_folders.name
+                WHERE saved_sounds.workspace_id = saved_folders.workspace_id
+                    AND saved_sounds.folder = saved_folders.name
             ) AS sound_count
         FROM saved_folders
-        WHERE id = ?
+        WHERE id = ? AND workspace_id = ?
         """,
-        (folder_id,),
+        (folder_id, workspace_id),
     ).fetchone()
 
 
-def _folder_row_by_name(connection: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+def _folder_row_by_name(
+    connection: sqlite3.Connection,
+    name: str,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> sqlite3.Row | None:
+    workspace_id = _normalize_workspace_id(workspace_id)
     return connection.execute(
         """
         SELECT
@@ -938,12 +1031,13 @@ def _folder_row_by_name(connection: sqlite3.Connection, name: str) -> sqlite3.Ro
             (
                 SELECT COUNT(*)
                 FROM saved_sounds
-                WHERE saved_sounds.folder = saved_folders.name
+                WHERE saved_sounds.workspace_id = saved_folders.workspace_id
+                    AND saved_sounds.folder = saved_folders.name
             ) AS sound_count
         FROM saved_folders
-        WHERE name = ?
+        WHERE workspace_id = ? AND name = ?
         """,
-        (name,),
+        (workspace_id, name),
     ).fetchone()
 
 
@@ -952,6 +1046,149 @@ def _normalize_folder_name(name: str) -> str:
     if normalized == "미분류":
         return ""
     return normalized[:80]
+
+
+def _ensure_workspace_columns(connection: sqlite3.Connection) -> None:
+    table_defaults = {
+        "saved_sounds": "TEXT NOT NULL DEFAULT 'local'",
+        "saved_folders": "TEXT NOT NULL DEFAULT 'local'",
+        "sound_feedback": "TEXT NOT NULL DEFAULT 'local'",
+    }
+    for table, definition in table_defaults.items():
+        columns = {
+            row[1]
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if "workspace_id" not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN workspace_id {definition}")
+        connection.execute(
+            f"""
+            UPDATE {table}
+            SET workspace_id = ?
+            WHERE workspace_id IS NULL OR TRIM(workspace_id) = ''
+            """,
+            (DEFAULT_WORKSPACE_ID,),
+        )
+
+
+def _rebuild_saved_sounds_if_needed(connection: sqlite3.Connection) -> None:
+    create_sql = _table_create_sql(connection, "saved_sounds")
+    if "freesound_id INTEGER NOT NULL UNIQUE" not in create_sql:
+        return
+
+    connection.execute("DROP INDEX IF EXISTS saved_sounds_source_identity")
+    connection.execute("ALTER TABLE saved_sounds RENAME TO saved_sounds_legacy")
+    connection.execute(
+        """
+        CREATE TABLE saved_sounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL DEFAULT 'local',
+            freesound_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL DEFAULT '',
+            license TEXT NOT NULL DEFAULT '',
+            duration REAL NOT NULL DEFAULT 0,
+            tags TEXT NOT NULL DEFAULT '[]',
+            preview_url TEXT,
+            url TEXT,
+            description TEXT,
+            score INTEGER NOT NULL DEFAULT 0,
+            source_provider TEXT NOT NULL DEFAULT 'freesound',
+            source_id TEXT NOT NULL DEFAULT '',
+            source_url TEXT,
+            license_url TEXT,
+            creator_url TEXT,
+            attribution_text TEXT,
+            download_url TEXT,
+            download_allowed INTEGER NOT NULL DEFAULT 1,
+            note TEXT NOT NULL DEFAULT '',
+            fit_rating INTEGER,
+            folder TEXT NOT NULL DEFAULT '',
+            labels TEXT NOT NULL DEFAULT '[]',
+            download_filename TEXT NOT NULL DEFAULT '',
+            saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO saved_sounds (
+            id, workspace_id, freesound_id, name, username, license, duration, tags,
+            preview_url, url, description, score, source_provider, source_id,
+            source_url, license_url, creator_url, attribution_text, download_url,
+            download_allowed, note, fit_rating, folder, labels, download_filename, saved_at
+        )
+        SELECT
+            id, COALESCE(NULLIF(workspace_id, ''), 'local'), freesound_id, name, username,
+            license, duration, tags, preview_url, url, description, score,
+            source_provider, source_id, source_url, license_url, creator_url,
+            attribution_text, download_url, download_allowed, note, fit_rating,
+            folder, labels, download_filename, saved_at
+        FROM saved_sounds_legacy
+        """
+    )
+    connection.execute("DROP TABLE saved_sounds_legacy")
+
+
+def _rebuild_saved_folders_if_needed(connection: sqlite3.Connection) -> None:
+    create_sql = _table_create_sql(connection, "saved_folders")
+    if "name TEXT NOT NULL UNIQUE" not in create_sql:
+        return
+
+    connection.execute("ALTER TABLE saved_folders RENAME TO saved_folders_legacy")
+    connection.execute(
+        """
+        CREATE TABLE saved_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL DEFAULT 'local',
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO saved_folders (id, workspace_id, name, sort_order, created_at)
+        SELECT id, COALESCE(NULLIF(workspace_id, ''), 'local'), name, sort_order, created_at
+        FROM saved_folders_legacy
+        """
+    )
+    connection.execute("DROP TABLE saved_folders_legacy")
+
+
+def _ensure_workspace_indexes(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP INDEX IF EXISTS saved_sounds_source_identity")
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS saved_sounds_workspace_source_identity
+        ON saved_sounds(workspace_id, source_provider, source_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS saved_folders_workspace_name
+        ON saved_folders(workspace_id, name)
+        """
+    )
+
+
+def _table_create_sql(connection: sqlite3.Connection, table_name: str) -> str:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row[0] if row and row[0] else ""
+
+
+def _normalize_workspace_id(workspace_id: str) -> str:
+    normalized = str(workspace_id or "").strip()
+    if not normalized:
+        return DEFAULT_WORKSPACE_ID
+    normalized = "".join(
+        character for character in normalized if character.isalnum() or character in "._-"
+    )
+    return normalized[:80] or DEFAULT_WORKSPACE_ID
 
 
 def _ensure_feedback_source_columns(connection: sqlite3.Connection) -> None:
