@@ -283,6 +283,8 @@ class ParsedPrompt:
     negative_concepts: tuple[str, ...] = ()
     negative_terms: tuple[str, ...] = ()
     intent_flags: tuple[str, ...] = ()
+    fallback_queries: tuple[str, ...] = ()
+    suggestion_concepts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -461,13 +463,25 @@ def _matches_trigger(text: str, compact_text: str, trigger: str) -> bool:
     return normalized in text or normalized.replace(" ", "") in compact_text
 
 
-def parse_prompt(prompt: str) -> ParsedPrompt:
+def parse_prompt(prompt: str, use_interpretation: bool = True) -> ParsedPrompt:
     cleaned = " ".join(prompt.split())
     lowered = cleaned.lower()
     compact = re.sub(r"\s+", "", lowered)
+    has_korean = bool(re.search(r"[가-힣]", cleaned))
+    english_terms = tuple(
+        word for word in re.findall(r"[a-z][a-z0-9_-]{1,}", lowered) if word not in ENGLISH_STOP_WORDS
+    )
+
+    if not use_interpretation:
+        query = lowered if lowered else cleaned
+        return ParsedPrompt(
+            original=cleaned,
+            query=query,
+            include_terms=_dedupe(list(english_terms)),
+        )
 
     terms: list[str] = []
-    interpreted_concepts: list[str] = []
+    matched_concepts: list[str] = []
     negative_concepts: list[str] = []
     negative_terms: list[str] = []
     intent_flags: list[str] = []
@@ -475,12 +489,10 @@ def parse_prompt(prompt: str) -> ParsedPrompt:
     for rule in CONCEPT_RULES:
         if _matches_any(lowered, compact, rule.triggers):
             terms.extend(rule.terms)
-            interpreted_concepts.extend(rule.concepts)
+            matched_concepts.extend(rule.concepts)
             intent_flags.extend(rule.intents)
 
-    terms.extend(
-        word for word in re.findall(r"[a-z][a-z0-9_-]{1,}", lowered) if word not in ENGLISH_STOP_WORDS
-    )
+    terms.extend(english_terms)
 
     for rule in NEGATIVE_RULES:
         if _matches_any(lowered, compact, rule.triggers):
@@ -491,7 +503,7 @@ def parse_prompt(prompt: str) -> ParsedPrompt:
 
     negative_set = set(_dedupe(list(negative_terms)))
     include_terms = tuple(term for term in _dedupe(terms) if term not in negative_set)
-    query = " ".join(include_terms) if include_terms else cleaned
+    query = " ".join(include_terms) if has_korean and include_terms else lowered
 
     suppressed_concepts = {
         concept
@@ -499,8 +511,15 @@ def parse_prompt(prompt: str) -> ParsedPrompt:
         for concept in NEGATIVE_SUPPRESSED_CONCEPTS.get(negative_concept, ())
     }
     interpreted_concepts = [
-        concept for concept in interpreted_concepts if concept not in suppressed_concepts
+        concept for concept in matched_concepts if has_korean and concept not in suppressed_concepts
     ]
+    suggestion_concepts = [
+        concept for concept in matched_concepts if concept not in suppressed_concepts
+    ]
+    fallback_queries: tuple[str, ...] = ()
+    english_fallback = " ".join(_dedupe(list(english_terms)))
+    if has_korean and english_fallback and english_fallback != query:
+        fallback_queries = (english_fallback,)
 
     return ParsedPrompt(
         original=cleaned,
@@ -510,6 +529,8 @@ def parse_prompt(prompt: str) -> ParsedPrompt:
         negative_concepts=_dedupe_labels(negative_concepts),
         negative_terms=tuple(sorted(negative_set)),
         intent_flags=_dedupe(intent_flags),
+        fallback_queries=fallback_queries,
+        suggestion_concepts=_dedupe_labels(suggestion_concepts),
     )
 
 
@@ -532,7 +553,11 @@ def build_search_suggestions(
     ):
         return ()
 
-    concepts = (*parsed.interpreted_concepts, *parsed.negative_concepts)
+    concepts = (
+        *parsed.interpreted_concepts,
+        *parsed.suggestion_concepts,
+        *parsed.negative_concepts,
+    )
     candidates: list[PromptSuggestion] = []
     concept_set = set(concepts)
 
@@ -540,7 +565,7 @@ def build_search_suggestions(
         if all(concept in concept_set for concept in required_concepts):
             candidates.append(PromptSuggestion(label=prompt, prompt=prompt, reason=reason))
 
-    for concept in parsed.interpreted_concepts:
+    for concept in _dedupe_labels([*parsed.interpreted_concepts, *parsed.suggestion_concepts]):
         for prompt, reason in CONCEPT_SUGGESTIONS.get(concept, ()):
             candidates.append(PromptSuggestion(label=prompt, prompt=prompt, reason=reason))
 

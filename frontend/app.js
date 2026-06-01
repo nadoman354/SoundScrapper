@@ -22,6 +22,8 @@ const recentListenWindowInput = document.querySelector("#recent-listen-window");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
 const searchSuggestionsEl = document.querySelector("#search-suggestions");
+const promptInterpretationEl = document.querySelector("#prompt-interpretation");
+const promptInterpretationInput = document.querySelector("#use-prompt-interpretation");
 const headerAuthEl = document.querySelector("#header-auth");
 const template = document.querySelector("#sound-card-template");
 const helpTourStartButton = document.querySelector("#help-tour-start");
@@ -378,11 +380,13 @@ function scheduleLiveSearchSuggestions() {
   const prompt = promptInput.value.trim();
   if (prompt.length < 2) {
     renderLiveSearchSuggestions([]);
+    renderPromptInterpretation(null);
     return;
   }
   searchSuggestionTimer = window.setTimeout(() => {
     loadLiveSearchSuggestions(prompt).catch(() => {
       renderLiveSearchSuggestions([]);
+      renderPromptInterpretation(null);
     });
   }, 300);
 }
@@ -391,11 +395,12 @@ async function loadLiveSearchSuggestions(prompt) {
   const requestId = searchSuggestionRequestId + 1;
   searchSuggestionRequestId = requestId;
   const data = await apiFetch(
-    `/api/search-suggestions?prompt=${encodeURIComponent(prompt)}`
+    `/api/search-interpretation?prompt=${encodeURIComponent(prompt)}&use_prompt_interpretation=${promptInterpretationEnabled()}`
   );
   if (requestId !== searchSuggestionRequestId || prompt !== promptInput.value.trim()) {
     return;
   }
+  renderPromptInterpretation(data);
   renderLiveSearchSuggestions(data.suggestions || []);
 }
 
@@ -405,6 +410,44 @@ function renderLiveSearchSuggestions(suggestions) {
     emptyHidden: true,
     statusPrefix: "추천 검색어 입력",
   });
+}
+
+function promptInterpretationEnabled() {
+  return promptInterpretationInput?.checked ?? true;
+}
+
+function renderPromptInterpretation(data) {
+  if (!promptInterpretationEl) {
+    return;
+  }
+  promptInterpretationEl.replaceChildren();
+  if (!data) {
+    promptInterpretationEl.hidden = true;
+    return;
+  }
+
+  const query = String(data.query || "").trim();
+  const concepts = Array.isArray(data.interpreted_concepts) ? data.interpreted_concepts : [];
+  const negativeConcepts = Array.isArray(data.negative_concepts) ? data.negative_concepts : [];
+  const fallbackQueries = Array.isArray(data.fallback_queries) ? data.fallback_queries : [];
+  const enabled = data.interpretation_enabled !== false;
+  const title = document.createElement("strong");
+  title.textContent = enabled ? "해석 미리보기" : "해석 무시";
+  const summary = document.createElement("span");
+  const parts = [];
+  if (concepts.length > 0) {
+    parts.push(`해석: ${concepts.slice(0, 4).join(", ")}`);
+  }
+  if (negativeConcepts.length > 0) {
+    parts.push(`제외: ${negativeConcepts.slice(0, 3).join(", ")}`);
+  }
+  parts.push(`${enabled ? "실제 검색식" : "원문 검색식"}: ${query || "없음"}`);
+  if (fallbackQueries.length > 0) {
+    parts.push(`부족할 때 보조 검색: ${fallbackQueries.slice(0, 2).join(", ")}`);
+  }
+  summary.textContent = parts.join(" · ");
+  promptInterpretationEl.append(title, summary);
+  promptInterpretationEl.hidden = false;
 }
 
 function renderSuggestionPanel(container, suggestions, options = {}) {
@@ -490,6 +533,7 @@ function buildSearchPayload() {
     page_size: Math.trunc(formNumber("#page-size", 20)),
     game_ready: checkboxValue("#game-ready"),
     search_modes: selectedSearchModes(),
+    use_prompt_interpretation: promptInterpretationEnabled(),
   };
 }
 
@@ -2502,7 +2546,15 @@ async function searchSounds(event) {
     const queryText = interpretationText
       ? `${interpretationText} · 실제 검색식: ${data.query}`
       : `검색식: ${data.query}`;
-    setStatus(`${queryText} · 후보 ${lastResults.length}개${warningText}`);
+    const fallbackText =
+      data.fallback_queries_used && data.fallback_queries_used.length
+        ? ` · 보조 검색식: ${data.fallback_queries_used.join(", ")}`
+        : "";
+    if (data.search_failed) {
+      setStatus(`검색 요청 실패: ${warningText.replace(/^ · /, "") || "출처 API 요청 실패"} · ${queryText} · 후보 ${lastResults.length}개`);
+    } else {
+      setStatus(`${queryText}${fallbackText} · 후보 ${lastResults.length}개${warningText}`);
+    }
     await autoAnalyzeTopResults();
   } catch (error) {
     setStatus(`검색 실패: ${translateError(error.message)}`);
@@ -3030,8 +3082,8 @@ function renderProviderStatus(providers) {
     const item = document.createElement("span");
     item.className = provider.enabled ? "provider-ok" : "provider-missing";
     item.title = provider.message || "";
-    item.dataset.tooltip = provider.message || "API 연결 상태입니다.";
-    const statusLabel = provider.enabled ? (provider.configured ? "연결" : "익명") : "미설정";
+    item.dataset.tooltip = provider.message || "API 설정 상태입니다. 실제 검색 성공 여부는 검색 후 상태줄에서 확인합니다.";
+    const statusLabel = provider.enabled ? (provider.configured ? "키 인식" : "익명") : "미설정";
     item.textContent = `${sourceLabel(provider.provider)} ${statusLabel}`;
     providerStatusEl.append(item);
   }
@@ -3299,6 +3351,10 @@ promptInput.addEventListener("input", scheduleLiveSearchSuggestions);
 resultSortSelect?.addEventListener("change", () => {
   renderCurrentResults();
   setStatus(`결과 정렬 변경: ${resultSortSelect.selectedOptions[0]?.textContent || "점수순"}`);
+});
+promptInterpretationInput?.addEventListener("change", () => {
+  scheduleLiveSearchSuggestions();
+  setStatus(promptInterpretationEnabled() ? "맥락 해석을 사용합니다." : "맥락 해석을 무시하고 원문으로 검색합니다.");
 });
 refreshSavedButton.addEventListener("click", loadSavedSounds);
 savedPanelToggle.addEventListener("click", () => {

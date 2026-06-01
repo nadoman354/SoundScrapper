@@ -88,6 +88,33 @@ def test_parse_prompt_handles_negative_sharp_context() -> None:
     assert "날카로움 제외" in parsed.negative_concepts
 
 
+def test_parse_prompt_keeps_english_query_as_provider_query() -> None:
+    parsed = parse_prompt("slash")
+
+    assert parsed.query == "slash"
+    assert parsed.interpreted_concepts == ()
+    assert "검격" in parsed.suggestion_concepts
+    assert "sword" in parsed.include_terms
+    assert "whoosh" in parsed.include_terms
+
+
+def test_parse_prompt_keeps_english_phrase_as_provider_query() -> None:
+    parsed = parse_prompt("sword slash")
+
+    assert parsed.query == "sword slash"
+    assert parsed.interpreted_concepts == ()
+    assert "검격" in parsed.suggestion_concepts
+
+
+def test_parse_prompt_can_ignore_interpretation() -> None:
+    parsed = parse_prompt("검 베기", use_interpretation=False)
+
+    assert parsed.query == "검 베기"
+    assert parsed.include_terms == ()
+    assert parsed.interpreted_concepts == ()
+    assert parsed.suggestion_concepts == ()
+
+
 def test_build_search_suggestions_for_korean_sfx_context() -> None:
     suggestions = build_search_suggestions("묵직한 검 휘두르는 소리 잡음 없이")
     prompts = [suggestion.prompt for suggestion in suggestions]
@@ -1190,7 +1217,7 @@ def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:
 
     response = client.post(
         "/api/search",
-        json={"prompt": "boom", "source_filter": "freesound"},
+        json={"prompt": "폭발", "source_filter": "freesound"},
     )
 
     assert response.status_code == 200
@@ -1199,6 +1226,7 @@ def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:
     assert "폭발" in response.json()["interpreted_concepts"]
     assert response.json()["negative_concepts"] == []
     assert response.json()["suggested_queries"]
+    assert response.json()["search_failed"] is False
 
 
 def test_search_suggestions_endpoint_returns_conservative_suggestions(tmp_path: Path) -> None:
@@ -1221,6 +1249,117 @@ def test_search_suggestions_endpoint_returns_conservative_suggestions(tmp_path: 
 
     assert unclear.status_code == 200
     assert unclear.json()["suggestions"] == []
+
+
+def test_search_interpretation_endpoint_can_preview_or_ignore_context(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "interpretation.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    english = client.get("/api/search-interpretation", params={"prompt": "slash"})
+
+    assert english.status_code == 200
+    assert english.json()["query"] == "slash"
+    assert english.json()["interpreted_concepts"] == []
+    assert any(item["prompt"] == "sword slash" for item in english.json()["suggestions"])
+
+    korean = client.get("/api/search-interpretation", params={"prompt": "검 베기"})
+
+    assert korean.status_code == 200
+    assert "sword" in korean.json()["query"]
+    assert "검격" in korean.json()["interpreted_concepts"]
+
+    ignored = client.get(
+        "/api/search-interpretation",
+        params={"prompt": "검 베기", "use_prompt_interpretation": "false"},
+    )
+
+    assert ignored.status_code == 200
+    assert ignored.json()["query"] == "검 베기"
+    assert ignored.json()["interpreted_concepts"] == []
+    assert ignored.json()["suggestions"] == []
+
+
+def test_search_uses_conservative_fallback_when_initial_results_are_low(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        freesound_api_key="token",
+        database_path=tmp_path / "fallback-search.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    calls: list[str] = []
+
+    async def fake_search_sources(settings_arg: Settings, request, query: str):
+        assert settings_arg == settings
+        calls.append(query)
+        if query == "ui":
+            return [
+                SoundSearchResult(
+                    id=77,
+                    name="UI Click",
+                    license="Creative Commons 0",
+                    duration=0.2,
+                    tags=["ui", "click"],
+                    preview_url="https://example.com/ui.mp3",
+                )
+            ], []
+        return [], []
+
+    monkeypatch.setattr("backend.app.main._search_sources", fake_search_sources)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/search",
+        json={
+            "prompt": "UI 클릭",
+            "source_filter": "freesound",
+            "license": "any",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == ["button click ui", "ui"]
+    assert response.json()["fallback_queries_used"] == ["ui"]
+    assert response.json()["results"][0]["name"] == "UI Click"
+
+
+def test_search_reports_request_failure_when_all_provider_requests_fail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        freesound_api_key="token",
+        database_path=tmp_path / "failed-search.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+
+    async def fake_search_sources(settings_arg: Settings, request, query: str):
+        assert settings_arg == settings
+        return [], ["Freesound 요청 실패: network unavailable"]
+
+    monkeypatch.setattr("backend.app.main._search_sources", fake_search_sources)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/search",
+        json={"prompt": "slash", "source_filter": "freesound"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["query"] == "slash"
+    assert response.json()["results"] == []
+    assert response.json()["search_failed"] is True
 
 
 def test_freesound_client_uses_search_endpoint_and_fields() -> None:

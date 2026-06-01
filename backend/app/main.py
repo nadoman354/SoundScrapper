@@ -68,6 +68,7 @@ from backend.app.schemas import (
     SavedFolderUpdate,
     SavedSound,
     SavedSoundUpdate,
+    SearchInterpretationResponse,
     SearchRequest,
     SearchResponse,
     SearchSuggestion,
@@ -148,6 +149,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             suggestions=_search_suggestion_models(
                 build_search_suggestions(prompt, limit=4)
             )
+        )
+
+    @app.get("/api/search-interpretation", response_model=SearchInterpretationResponse)
+    def search_interpretation(
+        prompt: str = "",
+        use_prompt_interpretation: bool = True,
+    ) -> SearchInterpretationResponse:
+        parsed = parse_prompt(
+            prompt,
+            use_interpretation=use_prompt_interpretation,
+        )
+        return SearchInterpretationResponse(
+            query=parsed.query,
+            interpreted_concepts=list(parsed.interpreted_concepts),
+            negative_concepts=list(parsed.negative_concepts),
+            fallback_queries=list(parsed.fallback_queries),
+            suggestions=_search_suggestion_models(
+                build_search_suggestions(parsed, limit=4)
+                if use_prompt_interpretation
+                else ()
+            ),
+            interpretation_enabled=use_prompt_interpretation,
         )
 
     @app.get("/api/freesound/auth-status", response_model=FreesoundAuthStatus)
@@ -306,12 +329,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="max_duration must be greater than or equal to min_duration.",
             )
 
-        parsed = parse_prompt(request.prompt)
+        parsed = parse_prompt(
+            request.prompt,
+            use_interpretation=request.use_prompt_interpretation,
+        )
         raw_results, source_warnings = await _search_sources(
             active_settings,
             request,
             parsed.query,
         )
+        fallback_queries_used: list[str] = []
+
+        if len(raw_results) <= 5 and parsed.fallback_queries:
+            fallback_query = parsed.fallback_queries[0]
+            fallback_results, fallback_warnings = await _search_sources(
+                active_settings,
+                request,
+                fallback_query,
+            )
+            if fallback_results:
+                raw_results = _dedupe_results([*raw_results, *fallback_results])
+                fallback_queries_used.append(fallback_query)
+            source_warnings = _merge_source_warnings(source_warnings, fallback_warnings)
 
         ranked: list[tuple[SoundSearchResult, SoundAnalysis | None]] = []
         for result in raw_results:
@@ -376,6 +415,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             interpreted_concepts=list(parsed.interpreted_concepts),
             negative_concepts=list(parsed.negative_concepts),
             suggested_queries=suggested_queries,
+            fallback_queries_used=fallback_queries_used,
+            search_failed=_search_failed(raw_results, source_warnings),
         )
 
     @app.post("/api/saved-sounds", response_model=SavedSound)
@@ -714,6 +755,23 @@ async def _source_result(
         return [], f"{name} API 오류: {exc.response.status_code}"
     except httpx.HTTPError as exc:
         return [], f"{name} 요청 실패: {exc}"
+
+
+def _merge_source_warnings(left: list[str], right: list[str]) -> list[str]:
+    merged: list[str] = []
+    for warning in [*left, *right]:
+        if warning and warning not in merged:
+            merged.append(warning)
+    return merged
+
+
+def _search_failed(results: list[SoundSearchResult], warnings: list[str]) -> bool:
+    if results:
+        return False
+    return any(
+        "요청 실패" in warning or "API 오류" in warning
+        for warning in warnings
+    )
 
 
 def _requested_sources(source_filter: str) -> set[str]:

@@ -76,6 +76,7 @@ class SearchRequest(BaseModel):
     game_ready: bool = False
     search_modes: list[SearchMode] = Field(default_factory=list)
     source_filter: SourceFilter = "all"
+    use_prompt_interpretation: bool = True
 
 
 class SearchSuggestion(BaseModel):
@@ -86,6 +87,15 @@ class SearchSuggestion(BaseModel):
 
 class SearchSuggestionsResponse(BaseModel):
     suggestions: list[SearchSuggestion] = Field(default_factory=list)
+
+
+class SearchInterpretationResponse(BaseModel):
+    query: str
+    interpreted_concepts: list[str] = Field(default_factory=list)
+    negative_concepts: list[str] = Field(default_factory=list)
+    fallback_queries: list[str] = Field(default_factory=list)
+    suggestions: list[SearchSuggestion] = Field(default_factory=list)
+    interpretation_enabled: bool = True
 
 
 class SoundSearchResult(BaseModel):
@@ -137,6 +147,8 @@ class SearchResponse(BaseModel):
     interpreted_concepts: list[str] = Field(default_factory=list)
     negative_concepts: list[str] = Field(default_factory=list)
     suggested_queries: list[SearchSuggestion] = Field(default_factory=list)
+    fallback_queries_used: list[str] = Field(default_factory=list)
+    search_failed: bool = False
 
 
 class SavedSound(BaseModel):

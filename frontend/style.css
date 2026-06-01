@@ -286,6 +286,32 @@ select {
   background: #ecfdf5;
 }
 
+.prompt-interpretation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #d7e5ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  padding: 9px 10px;
+}
+
+.prompt-interpretation strong {
+  flex: 0 0 auto;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.prompt-interpretation span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .search-memory {
   display: grid;
   gap: 8px;

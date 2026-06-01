@@ -50,6 +50,7 @@
                 aria-live="polite"
                 hidden
               ></div>
+              <div id="prompt-interpretation" class="prompt-interpretation" aria-live="polite" hidden></div>
               <div class="search-memory">
                 <button
                   id="favorite-search"
@@ -149,6 +150,11 @@
                 <label class="toggle-field" data-tooltip="게임에 쓰기 쉬운 짧고 깨끗한 후보를 우선합니다.">
                   <input id="game-ready" name="game-ready" type="checkbox" checked />
                   <span>게임용 우선</span>
+                </label>
+
+                <label class="toggle-field" data-tooltip="한국어 문장이나 감각어를 영어 검색식과 랭킹 힌트로 해석합니다. 끄면 입력한 문장을 그대로 검색합니다.">
+                  <input id="use-prompt-interpretation" name="use-prompt-interpretation" type="checkbox" checked />
+                  <span>맥락 해석 사용</span>
                 </label>
 
                 <button type="submit" data-tooltip="현재 조건으로 사운드 후보를 검색합니다.">검색</button>
