@@ -135,6 +135,7 @@ class SavedSound(BaseModel):
     fit_rating: int | None = Field(None, ge=1, le=5)
     folder: str = ""
     labels: list[str] = Field(default_factory=list)
+    download_filename: str = ""
 
 
 class SavedSoundUpdate(BaseModel):
@@ -142,6 +143,7 @@ class SavedSoundUpdate(BaseModel):
     fit_rating: int | None = Field(None, ge=1, le=5)
     folder: str | None = Field(None, max_length=80)
     labels: list[str] | None = Field(None, max_length=20)
+    download_filename: str | None = Field(None, max_length=120)
 
 
 class FeedbackRequest(BaseModel):

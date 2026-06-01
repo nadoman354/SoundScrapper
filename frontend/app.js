@@ -284,6 +284,21 @@ function translateError(message) {
 
 function licenseLabel(license) {
   const key = (license || "").toLowerCase();
+  if (key.includes("publicdomain/zero") || key.includes("creative commons 0")) {
+    return "CC0";
+  }
+  if (key.includes("creativecommons.org/licenses/by-sa")) {
+    return "CC BY-SA";
+  }
+  if (key.includes("creativecommons.org/licenses/by-nd")) {
+    return "CC BY-ND";
+  }
+  if (key.includes("creativecommons.org/licenses/by-nc")) {
+    return "CC BY-NC";
+  }
+  if (key.includes("creativecommons.org/licenses/by")) {
+    return "CC BY";
+  }
   return LICENSE_LABELS[key] || license || "라이선스 미상";
 }
 
@@ -309,16 +324,20 @@ function previewAudioUrl(sound) {
   return `/api/preview-audio/${sound.id}?preview_url=${encodeURIComponent(sound.preview_url)}`;
 }
 
-function downloadPreviewUrl(sound) {
+function downloadPreviewUrl(sound, nameOverride = null) {
   const params = new URLSearchParams({
     preview_url: sound.download_url || sound.preview_url || "",
-    name: sound.name || "sound",
+    name: nameOverride || sound.name || "sound",
   });
   return `/api/download-preview/${sound.id}?${params.toString()}`;
 }
 
 function originalSoundUrl(sound) {
   return sound.source_url || sound.url || "";
+}
+
+function downloadDisplayName(sound, fallbackName = null) {
+  return (sound.download_filename || "").trim() || fallbackName || sound.name || "sound";
 }
 
 function renderTags(container, tags, limit = 5) {
@@ -428,7 +447,7 @@ function renderSoundCard(sound) {
   sourceBadge.classList.add(`source-${sound.source_provider || "unknown"}`);
   node.querySelector("h3").textContent = sound.name;
   node.querySelector(".meta").textContent =
-    `${sound.duration.toFixed(2)}초 · ${licenseLabel(sound.license)} · ${sound.username || "제작자 미상"}`;
+    `${sound.duration.toFixed(2)}초 · ${licenseLabel(sound.license)}`;
   const adjustment =
     sound.personal_score_adjustment > 0
       ? ` +${sound.personal_score_adjustment}`
@@ -461,10 +480,20 @@ function renderSoundCard(sound) {
   } else {
     disableLoopControls(loopControls);
   }
-  cardContexts.set(sound.id, { sound, node, audio, loopState, loopControls });
+  const context = {
+    sound,
+    node,
+    audio,
+    loopState,
+    loopControls,
+    analysis: null,
+    waveformRendered: false,
+  };
+  cardContexts.set(sound.id, context);
 
   node.querySelector(".description").textContent = sound.description || "";
   renderTags(node.querySelector(".tags"), sound.tags || [], 5);
+  renderTags(node.querySelector(".all-tags"), sound.tags || [], 24);
 
   const link = node.querySelector("[data-action='open']");
   if (originalSoundUrl(sound)) {
@@ -505,6 +534,9 @@ function renderSoundCard(sound) {
   });
   details.addEventListener("toggle", () => {
     detailsButton.textContent = details.open ? "접기" : "상세";
+    if (details.open && context.analysis) {
+      renderWaveformForCard(context);
+    }
   });
 
   const waveformButton = node.querySelector("[data-action='waveform']");
@@ -514,7 +546,7 @@ function renderSoundCard(sound) {
     waveformButton.textContent = "파형 없음";
   } else {
     waveformButton.addEventListener("click", async () => {
-      await analyzeSoundCard(sound, node, audio, loopState, loopControls);
+      await analyzeSoundCard(context);
     });
   }
 
@@ -586,14 +618,14 @@ function renderAttributionNote(container, sound) {
   }
 }
 
-function triggerDownload(sound) {
+function triggerDownload(sound, nameOverride = null) {
   const link = document.createElement("a");
-  link.href = downloadPreviewUrl(sound);
+  link.href = downloadPreviewUrl(sound, nameOverride);
   link.download = "";
   document.body.append(link);
   link.click();
   link.remove();
-  setStatus(`다운로드 시작: ${sound.name} · 라이선스 확인은 원본 페이지 기준입니다.`);
+  setStatus(`다운로드 시작: ${nameOverride || sound.name} · 라이선스 확인은 원본 페이지 기준입니다.`);
 }
 
 async function hydrateStoredAnalysis(sound, node) {
@@ -603,31 +635,33 @@ async function hydrateStoredAnalysis(sound, node) {
       return;
     }
     waveformCache.set(sound.id, analysis);
-    renderLoudWarning(node, analysis);
-    renderFitBadges(node.querySelector(".fit-badges"), sound, analysis);
+    const context = cardContexts.get(sound.id);
+    if (context) {
+      context.analysis = analysis;
+      context.waveformRendered = false;
+    }
+    applyAnalysisToCard(sound, node, analysis, { cached: true });
   } catch {
     // 저장된 분석값은 보조 정보라 실패해도 검색 흐름은 유지한다.
   }
 }
 
-async function analyzeSoundCard(sound, node, audio, loopState, loopControls, options = {}) {
+async function analyzeSoundCard(context, options = {}) {
+  const { sound, node, audio } = context;
   const waveformButton = node.querySelector("[data-action='waveform']");
-  const waveformPanel = node.querySelector(".waveform-panel");
-  const canvas = node.querySelector(".waveform-canvas");
-  const metrics = node.querySelector(".analysis-metrics");
 
   try {
     waveformButton.disabled = true;
     waveformButton.textContent = options.auto ? "자동 분석 중..." : "분석 중...";
     const analysis = await analyzeSound(sound, audio);
-    waveformPanel.hidden = false;
-    renderMetrics(metrics, analysis);
-    renderLoudWarning(node, analysis);
-    renderFitBadges(node.querySelector(".fit-badges"), sound, analysis);
-    appendAnalysisReasons(node.querySelector(".score-reasons"), analysis);
-    drawWaveform(canvas, analysis, 0, loopState);
-    bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
+    context.analysis = analysis;
+    context.waveformRendered = false;
+    applyAnalysisToCard(sound, node, analysis);
     await saveAnalysis(analysis);
+    if (!options.auto) {
+      openCardDetails(node);
+      renderWaveformForCard(context);
+    }
     waveformButton.textContent = "파형 갱신";
     setStatus(`${options.auto ? "자동 " : ""}파형 분석 완료: ${sound.name}`);
   } catch (error) {
@@ -636,6 +670,47 @@ async function analyzeSoundCard(sound, node, audio, loopState, loopControls, opt
   } finally {
     waveformButton.disabled = false;
   }
+}
+
+function applyAnalysisToCard(sound, node, analysis, options = {}) {
+  renderLoudWarning(node, analysis);
+  renderFitBadges(node.querySelector(".fit-badges"), sound, analysis);
+  appendAnalysisReasons(node.querySelector(".score-reasons"), analysis);
+  const state = node.querySelector(".analysis-state");
+  if (state) {
+    state.hidden = false;
+    state.classList.toggle("is-danger", isLoudAnalysis(analysis));
+    state.textContent = isLoudAnalysis(analysis) ? "청취 주의" : options.cached ? "분석 캐시" : "분석됨";
+  }
+}
+
+function openCardDetails(node) {
+  const details = node.querySelector(".card-details");
+  const detailsButton = node.querySelector("[data-action='details']");
+  if (details) {
+    details.open = true;
+  }
+  if (detailsButton) {
+    detailsButton.textContent = "접기";
+  }
+}
+
+function renderWaveformForCard(context) {
+  const { sound, node, audio, loopState, loopControls, analysis } = context;
+  const details = node.querySelector(".card-details");
+  if (!analysis || !details?.open) {
+    return;
+  }
+  const waveformPanel = node.querySelector(".waveform-panel");
+  const canvas = node.querySelector(".waveform-canvas");
+  const metrics = node.querySelector(".analysis-metrics");
+  waveformPanel.hidden = false;
+  renderMetrics(metrics, analysis);
+  requestAnimationFrame(() => {
+    drawWaveform(canvas, analysis, 0, loopState);
+    bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
+    context.waveformRendered = true;
+  });
 }
 
 function appendAnalysisReasons(container, analysis) {
@@ -656,7 +731,11 @@ function appendAnalysisReasons(container, analysis) {
     reasons.push(`빈 구간 주의 ${analysis.emptiness_score}`);
   }
 
+  const existing = new Set(Array.from(container.children).map((item) => item.textContent));
   for (const reason of reasons) {
+    if (existing.has(reason)) {
+      continue;
+    }
     const pill = document.createElement("span");
     pill.className = "analysis-reason";
     pill.textContent = reason;
@@ -881,14 +960,7 @@ async function autoAnalyzeTopResults() {
     if (!context) {
       continue;
     }
-    await analyzeSoundCard(
-      context.sound,
-      context.node,
-      context.audio,
-      context.loopState,
-      context.loopControls,
-      { auto: true }
-    );
+    await analyzeSoundCard(context, { auto: true });
   }
   setStatus(`상위 ${targets.length}개 파형 자동 분석 완료`);
 }
@@ -907,6 +979,7 @@ function filteredSavedSounds() {
         sourceLabel(sound.source_provider),
         sound.note || "",
         sound.folder || "",
+        sound.download_filename || "",
         ...(sound.labels || []),
         ...(sound.tags || []),
       ]
@@ -970,8 +1043,8 @@ function renderSaved(sounds = filteredSavedSounds()) {
 
     const body = document.createElement("div");
     body.className = "saved-folder-body";
-    for (const sound of folderSounds) {
-      body.append(renderSavedItem(sound));
+    for (const [index, sound] of folderSounds.entries()) {
+      body.append(renderSavedItem(sound, defaultSavedDownloadName(folderName, index)));
     }
     folder.append(body);
     savedEl.append(folder);
@@ -1002,7 +1075,12 @@ function savedFolderKey(folderName) {
   return `folder:${folderName || "미분류"}`;
 }
 
-function renderSavedItem(sound) {
+function defaultSavedDownloadName(folderName, index) {
+  const baseName = (folderName || "").trim() || "미분류";
+  return `${baseName}_${index + 1}`;
+}
+
+function renderSavedItem(sound, defaultDownloadName) {
   const item = document.createElement("article");
   item.className = "saved-item";
   item.dataset.savedId = String(sound.saved_id);
@@ -1011,10 +1089,7 @@ function renderSavedItem(sound) {
   header.className = "saved-item-head";
   const title = document.createElement("strong");
   title.textContent = sound.name;
-  const ratingBadge = document.createElement("span");
-  ratingBadge.className = sound.fit_rating ? "saved-rating is-rated" : "saved-rating";
-  ratingBadge.textContent = sound.fit_rating ? `적합도 ${sound.fit_rating}/5` : "미평가";
-  header.append(title, ratingBadge);
+  header.append(title, renderSavedRatingControl(sound));
 
   const meta = document.createElement("span");
   meta.className = "saved-meta";
@@ -1050,7 +1125,9 @@ function renderSavedItem(sound) {
     downloadButton.disabled = true;
     downloadButton.textContent = "다운로드 없음";
   } else {
-    downloadButton.addEventListener("click", () => triggerDownload(sound));
+    downloadButton.addEventListener("click", () =>
+      triggerDownload(sound, downloadDisplayName(sound, defaultDownloadName))
+    );
   }
   actions.append(downloadButton);
 
@@ -1082,7 +1159,12 @@ function renderSavedItem(sound) {
   actions.append(deleteButton);
   item.append(actions);
 
-  item.append(renderSavedEditor(sound));
+  const manage = document.createElement("details");
+  manage.className = "saved-manage";
+  const manageSummary = document.createElement("summary");
+  manageSummary.textContent = "관리";
+  manage.append(manageSummary, renderSavedEditor(sound, defaultDownloadName));
+  item.append(manage);
   return item;
 }
 
@@ -1101,14 +1183,12 @@ function renderSavedLabels(labels) {
   return container;
 }
 
-function renderSavedEditor(sound) {
-  const editor = document.createElement("div");
-  editor.className = "saved-editor";
-
-  const ratingLabel = document.createElement("label");
-  ratingLabel.textContent = "적합도";
+function renderSavedRatingControl(sound) {
   const rating = document.createElement("select");
-  rating.className = "saved-rating-select";
+  rating.className = sound.fit_rating
+    ? "saved-rating-select is-rated"
+    : "saved-rating-select";
+  rating.setAttribute("aria-label", "적합도");
   const emptyRating = document.createElement("option");
   emptyRating.value = "";
   emptyRating.textContent = "미평가";
@@ -1125,7 +1205,12 @@ function renderSavedEditor(sound) {
       fit_rating: rating.value ? Number.parseInt(rating.value, 10) : null,
     });
   });
-  ratingLabel.append(rating);
+  return rating;
+}
+
+function renderSavedEditor(sound, defaultDownloadName) {
+  const editor = document.createElement("div");
+  editor.className = "saved-editor";
 
   const folderLabel = document.createElement("label");
   folderLabel.textContent = "폴더";
@@ -1149,6 +1234,20 @@ function renderSavedEditor(sound) {
   });
   labelsLabel.append(labels);
 
+  const downloadNameLabel = document.createElement("label");
+  downloadNameLabel.textContent = "다운로드명";
+  const downloadName = document.createElement("input");
+  downloadName.type = "text";
+  downloadName.value = downloadDisplayName(sound, defaultDownloadName);
+  downloadName.placeholder = defaultDownloadName;
+  downloadName.addEventListener("change", () => {
+    const nextName = downloadName.value.trim();
+    updateSavedMetadata(sound.saved_id, {
+      download_filename: nextName === defaultDownloadName ? "" : nextName,
+    });
+  });
+  downloadNameLabel.append(downloadName);
+
   const noteLabel = document.createElement("label");
   noteLabel.className = "saved-note-field";
   noteLabel.textContent = "메모";
@@ -1161,7 +1260,7 @@ function renderSavedEditor(sound) {
   });
   noteLabel.append(note);
 
-  editor.append(ratingLabel, folderLabel, labelsLabel, noteLabel);
+  editor.append(folderLabel, labelsLabel, downloadNameLabel, noteLabel);
   return editor;
 }
 

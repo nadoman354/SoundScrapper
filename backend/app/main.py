@@ -424,7 +424,9 @@ def _safe_download_filename(name: str, sound_id: int, suffix: str) -> str:
     base = re.sub(r"[^\w가-힣 ._-]+", "-", name, flags=re.ASCII).strip(" ._-")
     base = re.sub(r"\s+", " ", base)[:80].strip(" ._-")
     if not base:
-        base = "sound"
+        base = f"sound-{sound_id}"
     if not suffix.startswith("."):
         suffix = ".mp3"
-    return f"{sound_id}-{base}{suffix}"
+    if base.lower().endswith(suffix.lower()):
+        return base
+    return f"{base}{suffix}"

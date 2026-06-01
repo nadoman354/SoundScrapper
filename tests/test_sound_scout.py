@@ -262,6 +262,7 @@ def test_saved_sound_metadata_can_be_updated_and_preserved(tmp_path: Path) -> No
             fit_rating=4,
             folder="전투",
             labels=["magic", "impact", "magic"],
+            download_filename="전투_1",
         ),
     )
 
@@ -270,6 +271,7 @@ def test_saved_sound_metadata_can_be_updated_and_preserved(tmp_path: Path) -> No
     assert updated.fit_rating == 4
     assert updated.folder == "전투"
     assert updated.labels == ["magic", "impact"]
+    assert updated.download_filename == "전투_1"
 
     sound_data = sound.model_dump() if hasattr(sound, "model_dump") else sound.dict()
     save_sound(database_path, SoundSearchResult(**{**sound_data, "score": 91}))
@@ -280,6 +282,7 @@ def test_saved_sound_metadata_can_be_updated_and_preserved(tmp_path: Path) -> No
     assert listed[0].fit_rating == 4
     assert listed[0].folder == "전투"
     assert listed[0].labels == ["magic", "impact"]
+    assert listed[0].download_filename == "전투_1"
 
 
 def test_delete_saved_sound_removes_only_saved_candidate(tmp_path: Path) -> None:
@@ -382,6 +385,7 @@ def test_api_updates_and_deletes_saved_sound_metadata(tmp_path: Path) -> None:
             "fit_rating": 5,
             "folder": "BGM",
             "labels": ["loop", "menu"],
+            "download_filename": "BGM_1",
         },
     )
 
@@ -391,6 +395,7 @@ def test_api_updates_and_deletes_saved_sound_metadata(tmp_path: Path) -> None:
     assert body["fit_rating"] == 5
     assert body["folder"] == "BGM"
     assert body["labels"] == ["loop", "menu"]
+    assert body["download_filename"] == "BGM_1"
 
     delete_response = client.delete(f"/api/saved-sounds/{created['saved_id']}")
 
@@ -473,7 +478,7 @@ def test_download_preview_returns_attachment(tmp_path: Path, monkeypatch) -> Non
     assert response.content == b"audio"
     assert response.headers["content-type"] == "audio/mpeg"
     assert "attachment" in response.headers["content-disposition"]
-    assert "42" in response.headers["content-disposition"]
+    assert "Big%20Boom.mp3" in response.headers["content-disposition"]
 
 
 def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:

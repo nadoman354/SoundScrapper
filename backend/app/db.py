@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS saved_sounds (
     fit_rating INTEGER,
     folder TEXT NOT NULL DEFAULT '',
     labels TEXT NOT NULL DEFAULT '[]',
+    download_filename TEXT NOT NULL DEFAULT '',
     saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -206,6 +207,9 @@ def update_saved_sound(
     if "labels" in fields_set:
         assignments.append("labels = ?")
         values.append(json.dumps(_clean_labels(update.labels or []), ensure_ascii=False))
+    if "download_filename" in fields_set:
+        assignments.append("download_filename = ?")
+        values.append((update.download_filename or "").strip())
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -471,6 +475,7 @@ def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
         fit_rating=row["fit_rating"] if "fit_rating" in row.keys() else None,
         folder=row["folder"] if "folder" in row.keys() else "",
         labels=labels,
+        download_filename=row["download_filename"] if "download_filename" in row.keys() else "",
     )
 
 
@@ -729,6 +734,7 @@ def _ensure_saved_metadata_columns(connection: sqlite3.Connection) -> None:
         "fit_rating": "INTEGER",
         "folder": "TEXT NOT NULL DEFAULT ''",
         "labels": "TEXT NOT NULL DEFAULT '[]'",
+        "download_filename": "TEXT NOT NULL DEFAULT ''",
     }
     for name, definition in column_defaults.items():
         if name not in columns:
