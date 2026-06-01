@@ -804,6 +804,7 @@ async function hydrateStoredAnalysis(sound, node) {
     if (context) {
       context.analysis = analysis;
       context.waveformRendered = false;
+      renderWaveformForCard(context);
     }
     applyAnalysisToCard(sound, node, analysis, { cached: true });
   } catch {
@@ -822,10 +823,10 @@ async function analyzeSoundCard(context, options = {}) {
     context.analysis = analysis;
     context.waveformRendered = false;
     applyAnalysisToCard(sound, node, analysis);
+    renderWaveformForCard(context);
     await saveAnalysis(analysis);
     if (!options.auto) {
       openCardDetails(node);
-      renderWaveformForCard(context);
     }
     waveformButton.textContent = "파형 갱신";
     setStatus(`${options.auto ? "자동 " : ""}파형 분석 완료: ${sound.name}`);
@@ -862,8 +863,7 @@ function openCardDetails(node) {
 
 function renderWaveformForCard(context) {
   const { sound, node, audio, loopState, loopControls, analysis } = context;
-  const details = node.querySelector(".card-details");
-  if (!analysis || !details?.open) {
+  if (!analysis) {
     return;
   }
   const waveformPanel = node.querySelector(".waveform-panel");
@@ -873,8 +873,10 @@ function renderWaveformForCard(context) {
   renderMetrics(metrics, analysis);
   requestAnimationFrame(() => {
     drawWaveform(canvas, analysis, 0, loopState);
-    bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
-    context.waveformRendered = true;
+    if (!context.waveformRendered) {
+      bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
+      context.waveformRendered = true;
+    }
   });
 }
 
@@ -1289,6 +1291,7 @@ function renderSavedFolderSummary(group) {
     nameWrap.append(renameButton);
   }
   const count = document.createElement("span");
+  count.className = "saved-folder-count";
   count.textContent = `${group.sounds.length}개`;
   title.append(nameWrap, count);
 

@@ -220,8 +220,12 @@
           </div>
         </div>
         <div class="loud-warning" hidden>청취 주의: 음량이 큼</div>
-        <audio controls preload="none"></audio>
         <div class="analysis-state" hidden>분석됨</div>
+        <div class="waveform-panel" hidden>
+          <canvas class="waveform-canvas" width="640" height="96"></canvas>
+          <div class="analysis-metrics"></div>
+        </div>
+        <audio controls preload="none"></audio>
         <div class="fit-badges"></div>
         <div class="tags"></div>
 
@@ -273,10 +277,6 @@
             <button type="button" data-action="segment-loop" aria-pressed="false">구간 루프</button>
             <button type="button" data-action="clear-loop">해제</button>
             <span class="loop-status">Loop: Off</span>
-          </div>
-          <div class="waveform-panel" hidden>
-            <canvas class="waveform-canvas" width="640" height="96"></canvas>
-            <div class="analysis-metrics"></div>
           </div>
         </details>
       </article>
