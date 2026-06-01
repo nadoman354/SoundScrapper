@@ -378,7 +378,7 @@ select {
 
 .content-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
   gap: 20px;
   align-items: start;
 }
@@ -400,7 +400,7 @@ select {
 
 .sound-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: 14px;
 }
 
@@ -415,6 +415,7 @@ select {
 .sound-card {
   display: grid;
   gap: 13px;
+  min-width: 0;
   padding: 15px;
 }
 
@@ -422,6 +423,10 @@ select {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+}
+
+.card-head > div {
   min-width: 0;
 }
 
@@ -436,6 +441,7 @@ select {
   display: inline-flex;
   align-items: center;
   width: fit-content;
+  max-width: 100%;
   min-height: 24px;
   margin-bottom: 6px;
   border: 1px solid #cbd5e1;
@@ -445,6 +451,7 @@ select {
   font-size: 0.72rem;
   font-weight: 900;
   line-height: 1;
+  overflow-wrap: anywhere;
   padding: 0 8px;
 }
 
@@ -458,6 +465,13 @@ select {
   border-color: #fed7aa;
   background: #fff7ed;
   color: #9a3412;
+}
+
+.source-wikimedia,
+.source-wikimedia_audio {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
 .meta {
@@ -494,7 +508,10 @@ select {
 }
 
 audio {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 42px;
 }
 
@@ -507,6 +524,7 @@ audio {
   font-size: 0.8rem;
   font-weight: 800;
   line-height: 1.35;
+  overflow-wrap: anywhere;
   padding: 8px 10px;
 }
 
@@ -637,6 +655,7 @@ audio {
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 10px;
 }
@@ -742,7 +761,8 @@ audio {
 }
 
 .card-actions > * {
-  flex: 1;
+  flex: 1 1 110px;
+  min-width: 0;
 }
 
 .card-actions a {

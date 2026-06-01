@@ -39,6 +39,7 @@ const SOURCE_LABELS = {
   jamendo: "Jamendo",
   openverse: "Openverse",
   wikimedia: "Wikimedia",
+  wikimedia_audio: "Wikimedia",
   cc_mixter: "ccMixter",
 };
 
