@@ -40,6 +40,9 @@ SOUNDSCRAPPER_PREVIEW_CACHE_DIR=.cache/previews
 FREESOUND_BASE_URL=https://freesound.org
 JAMENDO_BASE_URL=https://api.jamendo.com/v3.0
 OPENVERSE_BASE_URL=https://api.openverse.org
+SOUNDSCRAPPER_AI_BASE_URL=http://127.0.0.1:8080
+SOUNDSCRAPPER_AI_MODEL=local-model
+SOUNDSCRAPPER_AI_TIMEOUT_SECONDS=8
 ```
 
 Openverse can run without credentials when anonymous API access is available.
@@ -48,6 +51,14 @@ If `OPENVERSE_BASE_URL` includes `/v1`, the app normalizes it automatically,
 but `https://api.openverse.org` is the recommended value.
 Jamendo is best treated as a non-commercial/educational integration unless you
 have confirmed your usage terms with Jamendo.
+The optional AI search assistant expects a local llama.cpp OpenAI-compatible
+server at `SOUNDSCRAPPER_AI_BASE_URL`. If the server is not running, the AI
+helper is disabled and normal search still works. The AI helper is used as an
+intent profiler: it can suggest whether a prompt such as `electric` means an
+electric spark SFX rather than electronic music, but it does not automatically
+remove, hide, or rerank results. When behavior personalization is enabled,
+SoundScrapper stores recent searches, listens, saves, and downloads in the
+workspace SQLite database and applies only weak score adjustments.
 
 4. Run the server.
 
@@ -212,6 +223,11 @@ Included:
 - `POST /api/sound-analyses`
 - `GET /api/sound-analyses/{sound_id}`
 - `POST /api/feedback`
+- `GET /api/ai-status`
+- `POST /api/ai-search-assist`
+- `POST /api/behavior-events`
+- `GET /api/behavior-profile`
+- `DELETE /api/behavior-events`
 - Freesound, Jamendo, and Openverse search with source deduplication
 - SQLite saved candidates, analysis metrics, and feedback
 - Waveform inspection from result cards

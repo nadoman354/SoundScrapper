@@ -51,6 +51,15 @@
                 hidden
               ></div>
               <div id="prompt-interpretation" class="prompt-interpretation" aria-live="polite" hidden></div>
+              <div class="ai-assist-panel">
+                <button
+                  id="ai-assist"
+                  type="button"
+                  data-tooltip="로컬 llama.cpp 서버가 켜져 있으면 사용자가 원하는 사운드 의도를 분석합니다. 적용 전까지 검색 결과를 자동으로 바꾸지 않습니다."
+                >AI 의도 파악</button>
+                <span id="ai-status" class="ai-status">로컬 AI 확인 중</span>
+                <div id="ai-suggestions" class="ai-suggestions" aria-live="polite" hidden></div>
+              </div>
               <div class="search-memory">
                 <button
                   id="favorite-search"
@@ -147,12 +156,24 @@
                   />
                 </label>
 
+                <label class="toggle-field" data-tooltip="검색, 청취, 저장 행동을 workspace 안에서만 기록해 결과를 약하게 개인화합니다.">
+                  <input id="behavior-personalization" name="behavior-personalization" type="checkbox" checked />
+                  <span>행동 기반 개인화</span>
+                </label>
+
+                <button
+                  id="clear-behavior-events"
+                  type="button"
+                  class="secondary-button"
+                  data-tooltip="현재 브라우저 workspace의 행동 기록을 삭제합니다."
+                >행동 기록 삭제</button>
+
                 <label class="toggle-field" data-tooltip="게임에 쓰기 쉬운 짧고 깨끗한 후보를 우선합니다.">
                   <input id="game-ready" name="game-ready" type="checkbox" checked />
                   <span>게임용 우선</span>
                 </label>
 
-                <label class="toggle-field" data-tooltip="한국어 문장이나 감각어를 영어 검색식과 랭킹 힌트로 해석합니다. 끄면 입력한 문장을 그대로 검색합니다.">
+                <label class="toggle-field" data-tooltip="한국어 검색어를 기본 영어 검색식으로 옮기고 추천 힌트를 보여줍니다. 끄면 입력한 문장을 그대로 검색합니다.">
                   <input id="use-prompt-interpretation" name="use-prompt-interpretation" type="checkbox" checked />
                   <span>맥락 해석 사용</span>
                 </label>

@@ -312,6 +312,113 @@ select {
   overflow-wrap: anywhere;
 }
 
+.ai-assist-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #d5e3e1;
+  border-radius: 8px;
+  background: #fbfffe;
+  padding: 9px 10px;
+}
+
+.ai-assist-panel > button {
+  min-height: 34px;
+  border: 1px solid #9fd3cc;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  padding: 0 10px;
+}
+
+.ai-assist-panel > button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.ai-status {
+  min-width: 0;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.ai-status.is-ok {
+  color: #0f766e;
+}
+
+.ai-status.is-off {
+  color: #9a3412;
+}
+
+.ai-suggestions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+}
+
+.ai-suggestions p {
+  flex: 1 1 100%;
+  margin: 0;
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ai-intent-meta {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-intent-meta span {
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 4px 8px;
+  overflow-wrap: anywhere;
+}
+
+.ai-suggestions .ai-intent-warning {
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 7px 8px;
+}
+
+.ai-apply-button {
+  min-height: 32px;
+  border: 1px solid #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 0.8rem;
+  padding: 0 10px;
+}
+
+.secondary-button {
+  border: 1px solid var(--line-strong);
+  background: #ffffff;
+  color: var(--accent-strong);
+}
+
+.secondary-button:hover {
+  background: #f0fdfa;
+}
+
 .search-memory {
   display: grid;
   gap: 8px;

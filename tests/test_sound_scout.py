@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -12,6 +13,9 @@ from fastapi.testclient import TestClient
 from backend.app.config import Settings, _normalize_openverse_base_url
 from backend.app.db import (
     FreesoundOAuthToken,
+    behavior_adjustment,
+    behavior_profile,
+    clear_behavior_events,
     create_saved_folder,
     delete_saved_folder,
     delete_saved_sound,
@@ -22,6 +26,7 @@ from backend.app.db import (
     list_saved_sounds,
     rename_saved_folder,
     save_analysis,
+    save_behavior_events,
     save_feedback,
     save_freesound_oauth_token,
     save_sound,
@@ -30,12 +35,21 @@ from backend.app.db import (
 from backend.app.freesound_client import FreesoundClient, build_filter
 from backend.app.freesound_oauth import FreesoundOriginalDownload, FreesoundTokenPayload
 from backend.app.jamendo_client import JamendoClient
+from backend.app.local_ai_client import LocalAIClient, LocalAIError, LocalAISearchAssist, LocalAIStatus
 from backend.app.main import _dedupe_results, _make_freesound_oauth_state, create_app
 from backend.app.openverse_client import OpenverseClient
 from backend.app.prompt_parser import build_search_suggestions, parse_prompt
 from backend.app.preview_cache import cache_preview_audio, is_allowed_preview_url
 from backend.app.ranker import score_sound
-from backend.app.schemas import FeedbackRequest, SavedSoundUpdate, SoundAnalysis, SoundSearchResult
+from backend.app.schemas import (
+    AISearchAssistRequest,
+    BehaviorEvent,
+    FeedbackRequest,
+    SavedSoundUpdate,
+    SearchSuggestion,
+    SoundAnalysis,
+    SoundSearchResult,
+)
 
 
 def test_parse_prompt_expands_korean_keywords() -> None:
@@ -113,6 +127,29 @@ def test_parse_prompt_can_ignore_interpretation() -> None:
     assert parsed.include_terms == ()
     assert parsed.interpreted_concepts == ()
     assert parsed.suggestion_concepts == ()
+
+
+def test_parse_prompt_does_not_match_ui_inside_circuit() -> None:
+    parsed = parse_prompt("Circuit")
+    suggestions = build_search_suggestions(parsed)
+
+    assert parsed.query == "circuit"
+    assert "circuit" in parsed.include_terms
+    assert "UI 클릭" not in parsed.suggestion_concepts
+    assert {suggestion.prompt for suggestion in suggestions}.isdisjoint(
+        {"ui click", "button click", "menu select", "sci-fi ui"}
+    )
+
+
+def test_parse_prompt_translates_common_korean_audio_terms() -> None:
+    drum = parse_prompt("드럼")
+    kick = parse_prompt("킥 드럼")
+    circuit = parse_prompt("회로")
+
+    assert "drum" in drum.query
+    assert "kick" in kick.query
+    assert "drum" in kick.query
+    assert "circuit" in circuit.query
 
 
 def test_build_search_suggestions_for_korean_sfx_context() -> None:
@@ -554,6 +591,88 @@ def test_feedback_adjustment_is_scoped_by_workspace(tmp_path: Path) -> None:
     assert feedback_adjustment(database_path, sound, workspace_id="guest") == 0
 
 
+def test_behavior_events_are_scoped_and_create_profile(tmp_path: Path) -> None:
+    database_path = tmp_path / "behavior.db"
+    save_behavior_events(
+        database_path,
+        [
+            BehaviorEvent(
+                event_type="sound_saved",
+                source_provider="freesound",
+                source_id="101",
+                duration=0.6,
+                metadata={"name": "Electric Spark", "tags": ["electric", "spark"]},
+            ),
+            BehaviorEvent(
+                event_type="play_finished",
+                source_provider="freesound",
+                source_id="102",
+                duration=8.0,
+                listen_seconds=0.4,
+                progress_ratio=0.05,
+                metadata={"name": "Synth Loop", "tags": ["synth", "music"]},
+            ),
+        ],
+        workspace_id="owner",
+    )
+    save_behavior_events(
+        database_path,
+        [
+            BehaviorEvent(
+                event_type="sound_saved",
+                source_provider="freesound",
+                source_id="201",
+                metadata={"name": "Guest Click", "tags": ["ui", "click"]},
+            )
+        ],
+        workspace_id="guest",
+    )
+
+    owner_profile = behavior_profile(database_path, workspace_id="owner")
+    guest_profile = behavior_profile(database_path, workspace_id="guest")
+
+    assert "electric" in owner_profile.positive_terms
+    assert "synth" in owner_profile.negative_terms
+    assert "click" not in owner_profile.positive_terms
+    assert "click" in guest_profile.positive_terms
+
+    deleted = clear_behavior_events(database_path, workspace_id="owner")
+
+    assert deleted == 2
+    assert behavior_profile(database_path, workspace_id="owner").total_events == 0
+    assert behavior_profile(database_path, workspace_id="guest").total_events == 1
+
+
+def test_behavior_adjustment_is_weak_and_does_not_hide_candidates(tmp_path: Path) -> None:
+    database_path = tmp_path / "behavior-adjustment.db"
+    for index in range(3):
+        save_behavior_events(
+            database_path,
+            [
+                BehaviorEvent(
+                    event_type="sound_saved",
+                    source_provider="freesound",
+                    source_id=str(300 + index),
+                    duration=0.8,
+                    metadata={"name": "Electric Spark", "tags": ["electric", "spark"]},
+                )
+            ],
+        )
+
+    candidate = SoundSearchResult(
+        id=999,
+        name="Electric Zap",
+        tags=["electric", "zap"],
+        source_provider="freesound",
+        source_id="999",
+    )
+
+    adjustment, reasons = behavior_adjustment(database_path, candidate)
+
+    assert 0 < adjustment <= 8
+    assert reasons
+
+
 def test_delete_saved_sound_removes_only_saved_candidate(tmp_path: Path) -> None:
     database_path = tmp_path / "delete-saved.db"
     first = save_sound(database_path, SoundSearchResult(id=13, name="Keep"))
@@ -700,6 +819,43 @@ def test_api_updates_and_deletes_saved_sound_metadata(tmp_path: Path) -> None:
 
     assert delete_response.status_code == 204
     assert client.get("/api/saved-sounds").json() == []
+
+
+def test_api_behavior_events_profile_and_delete_are_workspace_scoped(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "api-behavior.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    owner_headers = {"X-SoundScrapper-Workspace": "owner"}
+    guest_headers = {"X-SoundScrapper-Workspace": "guest"}
+
+    response = client.post(
+        "/api/behavior-events",
+        headers=owner_headers,
+        json={
+            "events": [
+                {
+                    "event_type": "sound_saved",
+                    "source_provider": "freesound",
+                    "source_id": "88",
+                    "metadata": {"name": "Electric Spark", "tags": ["electric", "spark"]},
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["saved_count"] == 1
+    assert "electric" in client.get("/api/behavior-profile", headers=owner_headers).json()[
+        "positive_terms"
+    ]
+    assert client.get("/api/behavior-profile", headers=guest_headers).json()["total_events"] == 0
+    assert client.delete("/api/behavior-events", headers=owner_headers).status_code == 204
+    assert client.get("/api/behavior-profile", headers=owner_headers).json()["total_events"] == 0
 
 
 def test_provider_status_reports_config_without_exposing_secrets(tmp_path: Path) -> None:
@@ -1360,6 +1516,233 @@ def test_search_reports_request_failure_when_all_provider_requests_fail(
     assert response.json()["query"] == "slash"
     assert response.json()["results"] == []
     assert response.json()["search_failed"] is True
+
+
+def test_search_can_disable_behavior_personalization(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key="token",
+        database_path=tmp_path / "behavior-search.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    save_behavior_events(
+        settings.database_path,
+        [
+            BehaviorEvent(
+                event_type="sound_saved",
+                source_provider="freesound",
+                source_id="900",
+                metadata={"name": "Electric Spark", "tags": ["electric", "spark"]},
+            )
+        ],
+    )
+
+    async def fake_search_sources(settings_arg: Settings, request, query: str):
+        assert settings_arg == settings
+        return [
+            SoundSearchResult(
+                id=900,
+                name="Electric Spark",
+                tags=["electric", "spark"],
+                source_provider="freesound",
+                source_id="900",
+            )
+        ], []
+
+    monkeypatch.setattr("backend.app.main._search_sources", fake_search_sources)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    enabled = client.post("/api/search", json={"prompt": "electric"}).json()["results"][0]
+    disabled = client.post(
+        "/api/search",
+        json={"prompt": "electric", "use_behavior_personalization": False},
+    ).json()["results"][0]
+
+    assert enabled["personal_score_adjustment"] > disabled["personal_score_adjustment"]
+    assert any("행동:" in reason for reason in enabled["score_reasons"])
+    assert all("행동:" not in reason for reason in disabled["score_reasons"])
+
+
+def test_local_ai_client_parses_llama_chat_response() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["model"] == "test-model"
+        user_payload = json.loads(payload["messages"][1]["content"])
+        assert user_payload["behavior_profile"]["positive_terms"] == ["electric"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "intent_label": "전기 스파크 SFX",
+                                    "sound_type": "sfx",
+                                    "primary_queries": [
+                                        "electric spark",
+                                        "electric zap",
+                                    ],
+                                    "primary_query": "drum",
+                                    "alternative_queries": [
+                                        {
+                                            "prompt": "kick drum",
+                                            "label": "kick drum",
+                                            "reason": "킥 드럼 후보",
+                                        }
+                                    ],
+                                    "avoid_concepts": ["electronic music", "synth"],
+                                    "preferred_duration": "short",
+                                    "preferred_sources": ["freesound", "openverse"],
+                                    "deprioritize_sources": ["jamendo"],
+                                    "translated_intent": "드럼 계열 사운드",
+                                    "confidence": 0.82,
+                                    "notes": ["자동 검색은 하지 않습니다."],
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = LocalAIClient(
+        base_url="http://local-ai.test",
+        model="test-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assist = asyncio.run(
+        client.suggest(
+            AISearchAssistRequest(
+                prompt="드럼",
+                behavior_profile={"positive_terms": ["electric"]},
+            )
+        )
+    )
+
+    assert assist.primary_query == "electric spark"
+    assert assist.alternative_queries[0].prompt == "electric zap"
+    assert assist.intent_label == "전기 스파크 SFX"
+    assert assist.sound_type == "sfx"
+    assert assist.avoid_concepts == ["electronic music", "synth"]
+    assert assist.preferred_sources == ["freesound", "openverse"]
+    assert assist.deprioritize_sources == ["jamendo"]
+    assert assist.confidence == 0.82
+    assert assist.translated_intent == "드럼 계열 사운드"
+
+
+def test_local_ai_status_reports_unreachable_server() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    client = LocalAIClient(
+        base_url="http://local-ai.test",
+        model="test-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    status = asyncio.run(client.status())
+
+    assert status.reachable is False
+    assert "응답 없음" in status.message
+
+
+def test_ai_assist_endpoint_returns_warning_without_breaking_search(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "ai-warning.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+
+    class FailingAIClient:
+        async def suggest(self, request):
+            raise LocalAIError("로컬 AI 서버 꺼짐")
+
+        async def status(self):
+            return LocalAIStatus(False, "로컬 AI 서버 꺼짐")
+
+    monkeypatch.setattr("backend.app.main.make_local_ai_client", lambda settings_arg: FailingAIClient())
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.post("/api/ai-search-assist", json={"prompt": "드럼"})
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert response.json()["primary_query"] == "드럼"
+    assert response.json()["warnings"] == ["로컬 AI 서버 꺼짐"]
+
+
+def test_ai_assist_endpoint_returns_optional_suggestions(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "ai-success.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+
+    class WorkingAIClient:
+        async def suggest(self, request):
+            assert "electric" in request.behavior_profile["positive_terms"]
+            return LocalAISearchAssist(
+                primary_query="circuit",
+                alternative_queries=[
+                    SearchSuggestion(
+                        label="electric buzz",
+                        prompt="electric buzz",
+                        reason="전기 지지직 후보",
+                    )
+                ],
+                translated_intent="회로 전기 사운드",
+                intent_label="전기 스파크 SFX",
+                sound_type="sfx",
+                preferred_duration="short",
+                avoid_concepts=["electronic music", "synth"],
+                preferred_sources=["freesound", "openverse"],
+                deprioritize_sources=["jamendo"],
+                confidence=0.75,
+                notes=["후보를 자동 제외하지 않습니다."],
+            )
+
+        async def status(self):
+            return LocalAIStatus(True, "로컬 AI 서버 연결됨")
+
+    monkeypatch.setattr("backend.app.main.make_local_ai_client", lambda settings_arg: WorkingAIClient())
+    app = create_app(settings)
+    client = TestClient(app)
+    client.post(
+        "/api/behavior-events",
+        json={
+            "events": [
+                {
+                    "event_type": "sound_saved",
+                    "source_provider": "freesound",
+                    "source_id": "501",
+                    "metadata": {"name": "Electric Spark", "tags": ["electric", "spark"]},
+                }
+            ]
+        },
+    )
+
+    response = client.post("/api/ai-search-assist", json={"prompt": "회로"})
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert response.json()["primary_query"] == "circuit"
+    assert response.json()["alternative_queries"][0]["prompt"] == "electric buzz"
+    assert response.json()["intent_label"] == "전기 스파크 SFX"
+    assert response.json()["sound_type"] == "sfx"
+    assert response.json()["avoid_concepts"] == ["electronic music", "synth"]
+    assert response.json()["preferred_sources"] == ["freesound", "openverse"]
+    assert response.json()["deprioritize_sources"] == ["jamendo"]
+    assert response.json()["confidence"] == 0.75
 
 
 def test_freesound_client_uses_search_endpoint_and_fields() -> None:

@@ -21,6 +21,9 @@ from backend.app.config import Settings, get_settings
 from backend.app.db import (
     DEFAULT_WORKSPACE_ID,
     FreesoundOAuthToken,
+    behavior_adjustment,
+    behavior_profile,
+    clear_behavior_events,
     create_saved_folder,
     delete_freesound_oauth_token,
     delete_saved_folder,
@@ -33,6 +36,7 @@ from backend.app.db import (
     list_saved_sounds,
     rename_saved_folder,
     save_analysis,
+    save_behavior_events,
     save_feedback,
     save_freesound_oauth_token,
     save_sound,
@@ -49,11 +53,18 @@ from backend.app.freesound_oauth import (
     refresh_access_token,
 )
 from backend.app.jamendo_client import JamendoClient, JamendoConfigurationError
+from backend.app.local_ai_client import LocalAIError, make_local_ai_client
 from backend.app.openverse_client import OpenverseClient
 from backend.app.preview_cache import PreviewCacheError, cache_preview_audio, media_type_for_path
 from backend.app.prompt_parser import PromptSuggestion, build_search_suggestions, parse_prompt
 from backend.app.ranker import score_sound, sort_ranked
 from backend.app.schemas import (
+    AISearchAssistRequest,
+    AISearchAssistResponse,
+    AIStatusResponse,
+    BehaviorEventsRequest,
+    BehaviorEventsResponse,
+    BehaviorProfileResponse,
     FeedbackRequest,
     FeedbackResponse,
     FreesoundAuthStatus,
@@ -171,6 +182,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else ()
             ),
             interpretation_enabled=use_prompt_interpretation,
+        )
+
+    @app.get("/api/ai-status", response_model=AIStatusResponse)
+    async def ai_status(fastapi_request: Request) -> AIStatusResponse:
+        request_settings: Settings = fastapi_request.app.state.settings
+        client = make_local_ai_client(request_settings)
+        status = await client.status()
+        return AIStatusResponse(
+            configured=bool(request_settings.ai_base_url),
+            reachable=status.reachable,
+            message=status.message,
+            base_url=request_settings.ai_base_url,
+            model=request_settings.ai_model,
+        )
+
+    @app.post("/api/ai-search-assist", response_model=AISearchAssistResponse)
+    async def ai_search_assist(
+        request: AISearchAssistRequest,
+        fastapi_request: Request,
+    ) -> AISearchAssistResponse:
+        request_settings: Settings = fastapi_request.app.state.settings
+        client = make_local_ai_client(request_settings)
+        if request.use_behavior_personalization:
+            profile = behavior_profile(
+                request_settings.database_path,
+                workspace_id=_workspace_id(fastapi_request),
+            )
+            request = _ai_request_with_behavior_profile(request, profile)
+        try:
+            assist = await client.suggest(request)
+        except LocalAIError as exc:
+            return AISearchAssistResponse(
+                enabled=False,
+                primary_query=request.prompt.strip(),
+                warnings=[str(exc)],
+                model=request_settings.ai_model,
+            )
+        return AISearchAssistResponse(
+            enabled=True,
+            primary_query=assist.primary_query,
+            alternative_queries=assist.alternative_queries,
+            translated_intent=assist.translated_intent,
+            intent_label=assist.intent_label,
+            sound_type=assist.sound_type,
+            preferred_duration=assist.preferred_duration,
+            avoid_concepts=assist.avoid_concepts,
+            preferred_sources=assist.preferred_sources,
+            deprioritize_sources=assist.deprioritize_sources,
+            confidence=assist.confidence,
+            notes=assist.notes,
+            warnings=assist.warnings,
+            model=request_settings.ai_model,
         )
 
     @app.get("/api/freesound/auth-status", response_model=FreesoundAuthStatus)
@@ -372,17 +435,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         adjusted = []
         for result, analysis in ranked:
-            adjustment = feedback_adjustment(
+            feedback_score = feedback_adjustment(
                 active_settings.database_path,
                 result,
                 analysis=analysis,
                 workspace_id=_workspace_id(fastapi_request),
             )
+            adjustment = feedback_score
+            behavior_reasons: list[str] = []
+            if request.use_behavior_personalization:
+                behavior_score, behavior_reasons = behavior_adjustment(
+                    active_settings.database_path,
+                    result,
+                    workspace_id=_workspace_id(fastapi_request),
+                )
+                adjustment += behavior_score
             reasons = list(result.score_reasons)
-            if adjustment > 0:
-                reasons.append(f"사용자 평가 반영 +{adjustment}")
-            elif adjustment < 0:
-                reasons.append(f"사용자 평가 반영 {adjustment}")
+            if feedback_score > 0:
+                reasons.append(f"사용자 평가 반영 +{feedback_score}")
+            elif feedback_score < 0:
+                reasons.append(f"사용자 평가 반영 {feedback_score}")
+            reasons.extend(behavior_reasons)
             if hasattr(result, "model_copy"):
                 result = result.model_copy(
                     update={
@@ -417,6 +490,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             suggested_queries=suggested_queries,
             fallback_queries_used=fallback_queries_used,
             search_failed=_search_failed(raw_results, source_warnings),
+        )
+
+    @app.post("/api/behavior-events", response_model=BehaviorEventsResponse)
+    def post_behavior_events(
+        request: BehaviorEventsRequest,
+        fastapi_request: Request,
+    ) -> BehaviorEventsResponse:
+        request_settings: Settings = fastapi_request.app.state.settings
+        saved_count = save_behavior_events(
+            request_settings.database_path,
+            request.events,
+            workspace_id=_workspace_id(fastapi_request),
+        )
+        return BehaviorEventsResponse(saved_count=saved_count)
+
+    @app.get("/api/behavior-profile", response_model=BehaviorProfileResponse)
+    def get_behavior_profile(fastapi_request: Request) -> BehaviorProfileResponse:
+        request_settings: Settings = fastapi_request.app.state.settings
+        return behavior_profile(
+            request_settings.database_path,
+            workspace_id=_workspace_id(fastapi_request),
+        )
+
+    @app.delete("/api/behavior-events", status_code=204)
+    def delete_behavior_events(fastapi_request: Request) -> None:
+        request_settings: Settings = fastapi_request.app.state.settings
+        clear_behavior_events(
+            request_settings.database_path,
+            workspace_id=_workspace_id(fastapi_request),
         )
 
     @app.post("/api/saved-sounds", response_model=SavedSound)
@@ -654,6 +756,24 @@ def _search_suggestion_models(
         )
         for suggestion in suggestions
     ]
+
+
+def _ai_request_with_behavior_profile(
+    request: AISearchAssistRequest,
+    profile: BehaviorProfileResponse,
+) -> AISearchAssistRequest:
+    payload = {
+        "summary_lines": profile.summary_lines,
+        "positive_terms": profile.positive_terms,
+        "negative_terms": profile.negative_terms,
+        "preferred_sources": profile.preferred_sources,
+        "avoided_sources": profile.avoided_sources,
+        "preferred_duration_seconds": profile.preferred_duration_seconds,
+        "total_events": profile.total_events,
+    }
+    if hasattr(request, "model_copy"):
+        return request.model_copy(update={"behavior_profile": payload})
+    return request.copy(update={"behavior_profile": payload})
 
 
 async def _search_sources(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -77,6 +77,7 @@ class SearchRequest(BaseModel):
     search_modes: list[SearchMode] = Field(default_factory=list)
     source_filter: SourceFilter = "all"
     use_prompt_interpretation: bool = True
+    use_behavior_personalization: bool = True
 
 
 class SearchSuggestion(BaseModel):
@@ -96,6 +97,41 @@ class SearchInterpretationResponse(BaseModel):
     fallback_queries: list[str] = Field(default_factory=list)
     suggestions: list[SearchSuggestion] = Field(default_factory=list)
     interpretation_enabled: bool = True
+
+
+class AIStatusResponse(BaseModel):
+    configured: bool
+    reachable: bool
+    message: str = ""
+    base_url: str | None = None
+    model: str | None = None
+
+
+class AISearchAssistRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=500)
+    license: LicenseFilter = "commercial"
+    min_duration: float = Field(0.1, ge=0)
+    max_duration: float = Field(3.0, gt=0)
+    source_filter: SourceFilter = "all"
+    use_behavior_personalization: bool = True
+    behavior_profile: dict[str, Any] = Field(default_factory=dict)
+
+
+class AISearchAssistResponse(BaseModel):
+    enabled: bool = False
+    primary_query: str = ""
+    alternative_queries: list[SearchSuggestion] = Field(default_factory=list)
+    translated_intent: str = ""
+    intent_label: str = ""
+    sound_type: str = "unknown"
+    preferred_duration: str = ""
+    avoid_concepts: list[str] = Field(default_factory=list)
+    preferred_sources: list[str] = Field(default_factory=list)
+    deprioritize_sources: list[str] = Field(default_factory=list)
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    model: str | None = None
 
 
 class SoundSearchResult(BaseModel):
@@ -149,6 +185,39 @@ class SearchResponse(BaseModel):
     suggested_queries: list[SearchSuggestion] = Field(default_factory=list)
     fallback_queries_used: list[str] = Field(default_factory=list)
     search_failed: bool = False
+
+
+class BehaviorEvent(BaseModel):
+    event_type: str = Field(..., min_length=1, max_length=60)
+    search_session_id: str = Field("", max_length=120)
+    source_provider: str = Field("", max_length=80)
+    source_id: str = Field("", max_length=120)
+    prompt: str = Field("", max_length=500)
+    query: str = Field("", max_length=500)
+    result_rank: int | None = Field(None, ge=0)
+    duration: float | None = Field(None, ge=0)
+    listen_seconds: float | None = Field(None, ge=0)
+    progress_ratio: float | None = Field(None, ge=0, le=1)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BehaviorEventsRequest(BaseModel):
+    events: list[BehaviorEvent] = Field(..., min_length=1, max_length=100)
+
+
+class BehaviorEventsResponse(BaseModel):
+    saved_count: int = 0
+
+
+class BehaviorProfileResponse(BaseModel):
+    total_events: int = 0
+    positive_terms: list[str] = Field(default_factory=list)
+    negative_terms: list[str] = Field(default_factory=list)
+    preferred_sources: list[str] = Field(default_factory=list)
+    avoided_sources: list[str] = Field(default_factory=list)
+    preferred_duration_seconds: float | None = None
+    summary_lines: list[str] = Field(default_factory=list)
 
 
 class SavedSound(BaseModel):

@@ -36,6 +36,9 @@ class Settings:
     openverse_base_url: str = "https://api.openverse.org"
     jamendo_client_id: str | None = None
     jamendo_base_url: str = "https://api.jamendo.com/v3.0"
+    ai_base_url: str = "http://127.0.0.1:8080"
+    ai_model: str = "local-model"
+    ai_timeout_seconds: float = 8.0
 
 
 def get_settings() -> Settings:
@@ -59,6 +62,7 @@ def get_settings() -> Settings:
         preview_cache_dir = PROJECT_ROOT / preview_cache_dir
 
     api_key = env_value("FREESOUND_API_KEY")
+    ai_timeout = _parse_float(env_value("SOUNDSCRAPPER_AI_TIMEOUT_SECONDS"), 8.0)
 
     return Settings(
         freesound_api_key=api_key if api_key else None,
@@ -78,6 +82,10 @@ def get_settings() -> Settings:
         jamendo_client_id=env_value("JAMENDO_CLIENT_ID"),
         jamendo_base_url=env_value("JAMENDO_BASE_URL", "https://api.jamendo.com/v3.0")
         or "https://api.jamendo.com/v3.0",
+        ai_base_url=env_value("SOUNDSCRAPPER_AI_BASE_URL", "http://127.0.0.1:8080")
+        or "http://127.0.0.1:8080",
+        ai_model=env_value("SOUNDSCRAPPER_AI_MODEL", "local-model") or "local-model",
+        ai_timeout_seconds=ai_timeout,
     )
 
 
@@ -86,3 +94,10 @@ def _normalize_openverse_base_url(value: str) -> str:
     if normalized.endswith("/v1"):
         normalized = normalized[:-3].rstrip("/")
     return normalized or "https://api.openverse.org"
+
+
+def _parse_float(value: str | None, default: float) -> float:
+    try:
+        return float(value) if value is not None else default
+    except ValueError:
+        return default

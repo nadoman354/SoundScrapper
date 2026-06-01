@@ -314,38 +314,38 @@ def _game_ready_adjustment(
     has_bgm_signal = _contains_any(text, BGM_TERMS)
 
     if result.duration <= 3:
-        score += 12
-        reasons.append("게임용: 짧은 SFX 후보 +12")
-    elif result.duration <= 8:
         score += 6
-        reasons.append("게임용: 짧게 편집 가능한 길이 +6")
+        reasons.append("게임용: 짧은 SFX 후보 +6")
+    elif result.duration <= 8:
+        score += 3
+        reasons.append("게임용: 짧게 편집 가능한 길이 +3")
     elif has_bgm_signal:
-        score += 8
-        reasons.append("게임용: BGM/루프 후보 +8")
+        score += 4
+        reasons.append("게임용: BGM/루프 후보 +4")
     else:
-        penalty = min(14, max(4, int((result.duration - 8) / 4) * 3))
+        penalty = min(6, max(2, int((result.duration - 8) / 5) * 2))
         score -= penalty
         reasons.append(f"게임용: 긴 단일 파일 주의 -{penalty}")
 
     if _contains_any(text, SFX_TERMS):
-        score += 10
-        reasons.append("게임용: SFX 태그/제목 +10")
+        score += 4
+        reasons.append("게임용: SFX 태그/제목 +4")
 
     if _contains_any(text, CLEAN_TERMS):
-        score += 6
-        reasons.append("게임용: 깨끗한 소스 단서 +6")
+        score += 3
+        reasons.append("게임용: 깨끗한 소스 단서 +3")
 
     if _contains_any(text, NOISE_AMBIENCE_TERMS):
-        penalty = 8 if has_bgm_signal else 16
+        penalty = 3 if has_bgm_signal else 6
         score -= penalty
         reasons.append(f"게임용: 환경음/잡음 단서 -{penalty}")
 
     if analysis:
         analysis_score, analysis_reasons = _analysis_game_adjustment(analysis)
-        score += analysis_score
+        score += int(analysis_score * 0.5)
         reasons.extend(analysis_reasons)
 
-    return max(-35, min(35, score)), reasons
+    return max(-18, min(18, score)), reasons
 
 
 def _search_mode_adjustment(

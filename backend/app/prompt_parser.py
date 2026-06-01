@@ -98,6 +98,42 @@ CONCEPT_RULES: tuple[ConceptRule, ...] = (
         ("물",),
     ),
     ConceptRule(
+        ("kick drum", "킥 드럼", "킥드럼"),
+        ("kick", "drum"),
+        ("킥 드럼",),
+        ("sfx",),
+    ),
+    ConceptRule(
+        ("snare", "snare drum", "스네어"),
+        ("snare", "drum"),
+        ("스네어",),
+        ("sfx",),
+    ),
+    ConceptRule(
+        ("drum", "percussion", "드럼", "북소리", "타악기"),
+        ("drum", "percussion"),
+        ("드럼",),
+        ("sfx",),
+    ),
+    ConceptRule(
+        ("circuit", "회로"),
+        ("circuit", "electric"),
+        ("전기/회로",),
+        ("sfx",),
+    ),
+    ConceptRule(
+        ("electric", "electricity", "전기", "감전"),
+        ("electric", "spark", "zap"),
+        ("전기",),
+        ("sfx",),
+    ),
+    ConceptRule(
+        ("buzz", "static", "지지직", "노이즈"),
+        ("electric", "buzz", "static"),
+        ("지지직",),
+        ("sfx",),
+    ),
+    ConceptRule(
         ("heavy", "bass", "low", "묵직", "둔탁", "저음", "박력"),
         ("heavy", "low", "bass", "boom"),
         ("묵직함",),
@@ -341,6 +377,32 @@ CONCEPT_SUGGESTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("door close", "문 닫힘 사운드를 찾습니다."),
         ("door creak", "삐걱이는 문소리 후보를 찾습니다."),
     ),
+    "드럼": (
+        ("drum hit", "짧은 드럼 히트 후보를 찾습니다."),
+        ("percussion loop", "타악기 루프 후보를 찾습니다."),
+        ("drum fill", "드럼 필인 후보를 찾습니다."),
+    ),
+    "킥 드럼": (
+        ("kick drum", "킥 드럼 후보를 직접 찾습니다."),
+        ("bass drum hit", "저역이 있는 킥/베이스 드럼 후보를 찾습니다."),
+    ),
+    "스네어": (
+        ("snare drum", "스네어 후보를 직접 찾습니다."),
+        ("snare hit", "짧은 스네어 히트 후보를 찾습니다."),
+    ),
+    "전기/회로": (
+        ("circuit electric", "회로나 전기 장치 느낌으로 찾습니다."),
+        ("electric buzz", "전기가 지지직거리는 후보를 찾습니다."),
+        ("spark zap", "스파크/감전 계열 후보를 찾습니다."),
+    ),
+    "전기": (
+        ("electric spark", "전기 스파크 후보를 찾습니다."),
+        ("zap shock", "감전/전격 느낌의 후보를 찾습니다."),
+    ),
+    "지지직": (
+        ("electric buzz", "전기 노이즈 후보를 찾습니다."),
+        ("static buzz", "지지직거리는 정적 노이즈 후보를 찾습니다."),
+    ),
     "묵직함": (
         ("heavy impact", "묵직한 충격음 표현으로 다시 찾습니다."),
         ("low boom", "저역이 강조된 후보를 찾습니다."),
@@ -460,7 +522,20 @@ def _matches_trigger(text: str, compact_text: str, trigger: str) -> bool:
     normalized = trigger.lower().strip()
     if not normalized:
         return False
+    if re.fullmatch(r"[a-z0-9][a-z0-9 ._+&/-]*", normalized):
+        return _matches_english_trigger(text, compact_text, normalized)
     return normalized in text or normalized.replace(" ", "") in compact_text
+
+
+def _matches_english_trigger(text: str, compact_text: str, trigger: str) -> bool:
+    pattern = rf"(?<![a-z0-9]){re.escape(trigger)}(?![a-z0-9])"
+    if re.search(pattern, text):
+        return True
+    compact_trigger = re.sub(r"\s+", "", trigger)
+    if compact_trigger == trigger:
+        return False
+    compact_pattern = rf"(?<![a-z0-9]){re.escape(compact_trigger)}(?![a-z0-9])"
+    return bool(re.search(compact_pattern, compact_text))
 
 
 def parse_prompt(prompt: str, use_interpretation: bool = True) -> ParsedPrompt:

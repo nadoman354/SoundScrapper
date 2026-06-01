@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.app.schemas import (
+    BehaviorEvent,
+    BehaviorProfileResponse,
     FeedbackRequest,
     FeedbackResponse,
     SavedFolder,
@@ -16,6 +18,9 @@ from backend.app.schemas import (
 )
 
 DEFAULT_WORKSPACE_ID = "local"
+BEHAVIOR_RETENTION_DAYS = 30
+BEHAVIOR_RETENTION_LIMIT = 2000
+BEHAVIOR_SCORE_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,24 @@ CREATE TABLE IF NOT EXISTS freesound_oauth_tokens (
     username TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS behavior_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id TEXT NOT NULL DEFAULT 'local',
+    event_type TEXT NOT NULL,
+    search_session_id TEXT NOT NULL DEFAULT '',
+    source_provider TEXT NOT NULL DEFAULT '',
+    source_id TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL DEFAULT '',
+    query TEXT NOT NULL DEFAULT '',
+    result_rank INTEGER,
+    duration REAL,
+    listen_seconds REAL,
+    progress_ratio REAL,
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -120,6 +143,7 @@ def initialize_db(database_path: Path) -> None:
         _rebuild_saved_folders_if_needed(connection)
         _ensure_workspace_indexes(connection)
         _ensure_saved_folder_table(connection)
+        _ensure_behavior_events_table(connection)
         _sync_existing_saved_folders(connection)
         _ensure_feedback_source_columns(connection)
         connection.commit()
@@ -727,6 +751,335 @@ def feedback_adjustment(
     return max(-25, min(25, adjustment))
 
 
+def save_behavior_events(
+    database_path: Path,
+    events: list[BehaviorEvent],
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> int:
+    initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
+    rows = [
+        (
+            workspace_id,
+            _safe_text(event.event_type, 60),
+            _safe_text(event.search_session_id, 120),
+            _safe_text(event.source_provider, 80),
+            _safe_text(event.source_id, 120),
+            _safe_text(event.prompt, 500),
+            _safe_text(event.query, 500),
+            event.result_rank,
+            event.duration,
+            event.listen_seconds,
+            event.progress_ratio,
+            json.dumps(_compact_mapping(event.filters), ensure_ascii=False),
+            json.dumps(_compact_mapping(event.metadata), ensure_ascii=False),
+        )
+        for event in events[:100]
+    ]
+    if not rows:
+        return 0
+
+    with sqlite3.connect(database_path) as connection:
+        connection.executemany(
+            """
+            INSERT INTO behavior_events (
+                workspace_id, event_type, search_session_id, source_provider, source_id,
+                prompt, query, result_rank, duration, listen_seconds, progress_ratio,
+                filters_json, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        _prune_behavior_events(connection, workspace_id)
+        connection.commit()
+    return len(rows)
+
+
+def clear_behavior_events(
+    database_path: Path,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> int:
+    initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
+    with sqlite3.connect(database_path) as connection:
+        cursor = connection.execute(
+            "DELETE FROM behavior_events WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        connection.commit()
+        return cursor.rowcount
+
+
+def behavior_profile(
+    database_path: Path,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> BehaviorProfileResponse:
+    initialize_db(database_path)
+    rows = _recent_behavior_rows(database_path, workspace_id, limit=BEHAVIOR_RETENTION_LIMIT)
+    positive_terms: dict[str, int] = {}
+    negative_terms: dict[str, int] = {}
+    positive_sources: dict[str, int] = {}
+    negative_sources: dict[str, int] = {}
+    positive_durations: list[float] = []
+
+    for row in rows:
+        metadata = _json_object(row["metadata_json"])
+        tags = _metadata_terms(metadata)
+        source = row["source_provider"] or str(metadata.get("source_provider") or "")
+        signal = _behavior_signal(row)
+        if signal > 0:
+            _count_terms(positive_terms, tags, signal)
+            if source:
+                positive_sources[source] = positive_sources.get(source, 0) + signal
+            duration = _behavior_duration(row, metadata)
+            if duration is not None:
+                positive_durations.append(duration)
+        elif signal < 0:
+            _count_terms(negative_terms, tags, abs(signal))
+            if source:
+                negative_sources[source] = negative_sources.get(source, 0) + abs(signal)
+
+    preferred_duration = (
+        round(sum(positive_durations) / len(positive_durations), 2)
+        if positive_durations
+        else None
+    )
+    positive = _top_keys(positive_terms, 8)
+    negative = _top_keys(negative_terms, 8)
+    preferred_sources = _top_keys(positive_sources, 3)
+    avoided_sources = _top_keys(negative_sources, 3)
+    summary_lines = _behavior_summary_lines(
+        positive,
+        negative,
+        preferred_sources,
+        avoided_sources,
+        preferred_duration,
+    )
+    return BehaviorProfileResponse(
+        total_events=len(rows),
+        positive_terms=positive,
+        negative_terms=negative,
+        preferred_sources=preferred_sources,
+        avoided_sources=avoided_sources,
+        preferred_duration_seconds=preferred_duration,
+        summary_lines=summary_lines,
+    )
+
+
+def behavior_adjustment(
+    database_path: Path,
+    result: SoundSearchResult,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+) -> tuple[int, list[str]]:
+    rows = _recent_behavior_rows(database_path, workspace_id, limit=500)
+    if not rows:
+        return 0, []
+
+    source_provider = result.source_provider or "freesound"
+    source_id = result.source_id or str(result.id)
+    candidate_terms = {
+        *_metadata_terms({"name": result.name, "tags": result.tags}),
+        source_provider.lower(),
+    }
+    exact_positive = 0
+    exact_negative = 0
+    related_positive = 0
+    related_skip_count = 0
+
+    for row in rows:
+        metadata = _json_object(row["metadata_json"])
+        signal = _behavior_signal(row)
+        if signal == 0:
+            continue
+
+        row_source = row["source_provider"] or str(metadata.get("source_provider") or "")
+        row_source_id = row["source_id"] or str(metadata.get("source_id") or "")
+        exact = row_source == source_provider and row_source_id == source_id
+        if exact:
+            if signal > 0:
+                exact_positive += signal * 3
+            else:
+                exact_negative += signal
+            continue
+
+        row_terms = _metadata_terms(metadata)
+        overlap = len(candidate_terms & row_terms)
+        if overlap <= 0:
+            continue
+        if signal > 0:
+            related_positive += min(2, overlap) * signal
+        elif signal < 0:
+            related_skip_count += 1
+
+    positive = min(BEHAVIOR_SCORE_LIMIT, exact_positive + min(4, related_positive))
+    negative = max(-BEHAVIOR_SCORE_LIMIT, exact_negative - min(4, related_skip_count // 2))
+    adjustment = max(-BEHAVIOR_SCORE_LIMIT, min(BEHAVIOR_SCORE_LIMIT, positive + negative))
+    reasons: list[str] = []
+    if adjustment > 0:
+        reasons.append(f"행동: 저장/청취 패턴과 유사 +{adjustment}")
+    elif adjustment < 0:
+        reasons.append(f"행동: 자주 넘긴 후보와 유사 {adjustment}")
+    return adjustment, reasons
+
+
+def _recent_behavior_rows(
+    database_path: Path,
+    workspace_id: str,
+    limit: int,
+) -> list[sqlite3.Row]:
+    initialize_db(database_path)
+    workspace_id = _normalize_workspace_id(workspace_id)
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        return connection.execute(
+            """
+            SELECT *
+            FROM behavior_events
+            WHERE workspace_id = ?
+                AND created_at >= datetime('now', ?)
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (workspace_id, f"-{BEHAVIOR_RETENTION_DAYS} days", limit),
+        ).fetchall()
+
+
+def _behavior_signal(row: sqlite3.Row) -> int:
+    event_type = row["event_type"]
+    if event_type == "sound_saved":
+        return 3
+    if event_type == "sound_downloaded":
+        return 3
+    if event_type == "play_finished":
+        listen_seconds = float(row["listen_seconds"] or 0)
+        progress_ratio = float(row["progress_ratio"] or 0)
+        duration = float(row["duration"] or 0)
+        if listen_seconds >= 8 or progress_ratio >= 0.7 or (duration <= 4 and progress_ratio >= 0.6):
+            return 1
+        if duration >= 1.5 and (listen_seconds < 1.5 or progress_ratio < 0.1):
+            return -1
+    if event_type == "sound_unsaved":
+        return -1
+    return 0
+
+
+def _behavior_duration(row: sqlite3.Row, metadata: dict[str, object]) -> float | None:
+    raw = row["duration"] if row["duration"] is not None else metadata.get("duration")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _metadata_terms(metadata: dict[str, object]) -> set[str]:
+    terms: set[str] = set()
+    tags = metadata.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            terms.update(_split_terms(str(tag)))
+    name = metadata.get("name")
+    if name:
+        terms.update(_split_terms(str(name)))
+    return {term for term in terms if len(term) > 2}
+
+
+def _split_terms(value: str) -> set[str]:
+    return {
+        term
+        for term in value.lower().replace("_", " ").replace("-", " ").split()
+        if len(term) > 2
+    }
+
+
+def _count_terms(target: dict[str, int], terms: set[str], weight: int) -> None:
+    for term in terms:
+        target[term] = target.get(term, 0) + weight
+
+
+def _top_keys(counts: dict[str, int], limit: int) -> list[str]:
+    return [
+        key
+        for key, _value in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]
+
+
+def _behavior_summary_lines(
+    positive_terms: list[str],
+    negative_terms: list[str],
+    preferred_sources: list[str],
+    avoided_sources: list[str],
+    preferred_duration: float | None,
+) -> list[str]:
+    lines: list[str] = []
+    if positive_terms:
+        lines.append(f"선호 신호: {', '.join(positive_terms[:5])}")
+    if negative_terms:
+        lines.append(f"자주 넘김: {', '.join(negative_terms[:5])}")
+    if preferred_sources:
+        lines.append(f"선호 출처: {', '.join(preferred_sources)}")
+    if avoided_sources:
+        lines.append(f"회피 출처: {', '.join(avoided_sources)}")
+    if preferred_duration is not None:
+        lines.append(f"선호 길이 평균: {preferred_duration:.2f}초")
+    return lines[:5]
+
+
+def _safe_text(value: object, limit: int) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _compact_mapping(value: dict[str, object]) -> dict[str, object]:
+    output: dict[str, object] = {}
+    for key, raw in (value or {}).items():
+        if len(output) >= 30:
+            break
+        safe_key = _safe_text(key, 80)
+        if not safe_key:
+            continue
+        if isinstance(raw, (str, int, float, bool)) or raw is None:
+            output[safe_key] = raw
+        elif isinstance(raw, list):
+            output[safe_key] = [_safe_text(item, 120) for item in raw[:30]]
+        else:
+            output[safe_key] = _safe_text(raw, 500)
+    return output
+
+
+def _json_object(value: str | None) -> dict[str, object]:
+    try:
+        parsed = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _prune_behavior_events(connection: sqlite3.Connection, workspace_id: str) -> None:
+    connection.execute(
+        """
+        DELETE FROM behavior_events
+        WHERE workspace_id = ?
+            AND created_at < datetime('now', ?)
+        """,
+        (workspace_id, f"-{BEHAVIOR_RETENTION_DAYS} days"),
+    )
+    connection.execute(
+        """
+        DELETE FROM behavior_events
+        WHERE workspace_id = ?
+            AND id NOT IN (
+                SELECT id
+                FROM behavior_events
+                WHERE workspace_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+            )
+        """,
+        (workspace_id, workspace_id, BEHAVIOR_RETENTION_LIMIT),
+    )
+
+
 def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
     tags = json.loads(row["tags"]) if row["tags"] else []
     labels = json.loads(row["labels"]) if "labels" in row.keys() and row["labels"] else []
@@ -1058,6 +1411,42 @@ def _ensure_saved_folder_table(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_behavior_events_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS behavior_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL DEFAULT 'local',
+            event_type TEXT NOT NULL,
+            search_session_id TEXT NOT NULL DEFAULT '',
+            source_provider TEXT NOT NULL DEFAULT '',
+            source_id TEXT NOT NULL DEFAULT '',
+            prompt TEXT NOT NULL DEFAULT '',
+            query TEXT NOT NULL DEFAULT '',
+            result_rank INTEGER,
+            duration REAL,
+            listen_seconds REAL,
+            progress_ratio REAL,
+            filters_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS behavior_events_workspace_created
+        ON behavior_events(workspace_id, created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS behavior_events_workspace_source
+        ON behavior_events(workspace_id, source_provider, source_id)
+        """
+    )
+
+
 def _ensure_freesound_oauth_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
@@ -1288,6 +1677,18 @@ def _ensure_workspace_indexes(connection: sqlite3.Connection) -> None:
         """
         CREATE UNIQUE INDEX IF NOT EXISTS saved_folders_workspace_name
         ON saved_folders(workspace_id, name)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS behavior_events_workspace_created
+        ON behavior_events(workspace_id, created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS behavior_events_workspace_source
+        ON behavior_events(workspace_id, source_provider, source_id)
         """
     )
 

@@ -19,11 +19,16 @@ const favoriteSearchButton = document.querySelector("#favorite-search");
 const soloLongAudioInput = document.querySelector("#solo-long-audio");
 const resultSortSelect = document.querySelector("#result-sort");
 const recentListenWindowInput = document.querySelector("#recent-listen-window");
+const behaviorPersonalizationInput = document.querySelector("#behavior-personalization");
+const clearBehaviorEventsButton = document.querySelector("#clear-behavior-events");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
 const searchSuggestionsEl = document.querySelector("#search-suggestions");
 const promptInterpretationEl = document.querySelector("#prompt-interpretation");
 const promptInterpretationInput = document.querySelector("#use-prompt-interpretation");
+const aiAssistButton = document.querySelector("#ai-assist");
+const aiStatusEl = document.querySelector("#ai-status");
+const aiSuggestionsEl = document.querySelector("#ai-suggestions");
 const headerAuthEl = document.querySelector("#header-auth");
 const template = document.querySelector("#sound-card-template");
 const helpTourStartButton = document.querySelector("#help-tour-start");
@@ -63,9 +68,15 @@ const WORKSPACE_ID_KEY = "soundscrapper.workspaceId";
 const SEARCH_SEQUENCE_KEY = "soundscrapper.searchSequence";
 const RECENT_PLAYED_SOUNDS_KEY = "soundscrapper.recentPlayedSounds";
 const RECENT_LISTEN_WINDOW_KEY = "soundscrapper.recentListenSearchWindow";
+const BEHAVIOR_PERSONALIZATION_KEY = "soundscrapper.behaviorPersonalization";
 const DEFAULT_RECENT_LISTEN_WINDOW = 5;
 
 let currentSearchSequence = readStoredNumber(SEARCH_SEQUENCE_KEY, 0);
+let currentSearchSessionId = "";
+let currentSearchQuery = "";
+const behaviorEventQueue = [];
+let behaviorFlushTimer = null;
+const audioListenState = new WeakMap();
 
 const LICENSE_LABELS = {
   "creative commons 0": "CC0",
@@ -416,6 +427,32 @@ function promptInterpretationEnabled() {
   return promptInterpretationInput?.checked ?? true;
 }
 
+function behaviorPersonalizationEnabled() {
+  return behaviorPersonalizationInput?.checked ?? true;
+}
+
+function initializeBehaviorPersonalization() {
+  if (!behaviorPersonalizationInput) {
+    return;
+  }
+  const stored = localStorage.getItem(BEHAVIOR_PERSONALIZATION_KEY);
+  behaviorPersonalizationInput.checked = stored === null ? true : stored === "true";
+  behaviorPersonalizationInput.addEventListener("change", () => {
+    localStorage.setItem(BEHAVIOR_PERSONALIZATION_KEY, String(behaviorPersonalizationInput.checked));
+    if (!behaviorPersonalizationInput.checked) {
+      behaviorEventQueue.length = 0;
+      window.clearTimeout(behaviorFlushTimer);
+      behaviorFlushTimer = null;
+    }
+    setStatus(
+      behaviorPersonalizationInput.checked
+        ? "행동 기반 개인화를 사용합니다."
+        : "행동 기반 개인화를 끕니다."
+    );
+  });
+  clearBehaviorEventsButton?.addEventListener("click", clearBehaviorEvents);
+}
+
 function renderPromptInterpretation(data) {
   if (!promptInterpretationEl) {
     return;
@@ -489,6 +526,269 @@ function renderSuggestionPanel(container, suggestions, options = {}) {
   container.append(label, list);
 }
 
+async function loadAIStatus() {
+  if (!aiStatusEl) {
+    return;
+  }
+  try {
+    const data = await apiFetch("/api/ai-status");
+    renderAIStatus(data);
+  } catch (error) {
+    renderAIStatus({
+      configured: false,
+      reachable: false,
+      message: `AI 상태 확인 실패: ${translateError(error.message)}`,
+    });
+  }
+}
+
+function renderAIStatus(data) {
+  if (!aiStatusEl) {
+    return;
+  }
+  aiStatusEl.classList.toggle("is-ok", Boolean(data.reachable));
+  aiStatusEl.classList.toggle("is-off", !data.reachable);
+  aiStatusEl.textContent = data.reachable ? "로컬 AI 연결됨" : "로컬 AI 서버 꺼짐";
+  aiStatusEl.dataset.tooltip = data.message || "llama.cpp OpenAI 호환 서버 상태입니다.";
+}
+
+async function requestAISearchAssist() {
+  if (!aiSuggestionsEl) {
+    return;
+  }
+  const payload = buildAISearchAssistPayload();
+  if (!payload.prompt) {
+    setStatus("AI 의도 파악을 하려면 검색 프롬프트를 입력하세요.");
+    return;
+  }
+  aiAssistButton.disabled = true;
+  aiAssistButton.textContent = "AI 분석 중";
+  renderAIWaiting();
+  try {
+    const data = await apiFetch("/api/ai-search-assist", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    renderAISearchAssist(data);
+    if (data.enabled) {
+      setStatus("AI 의도 분석을 확인했습니다. 적용 전까지 검색은 바뀌지 않습니다.");
+    } else {
+      setStatus((data.warnings || [])[0] || "로컬 AI 서버가 꺼져 있습니다.");
+    }
+    await loadAIStatus();
+  } catch (error) {
+    renderAISearchAssist({
+      enabled: false,
+      primary_query: payload.prompt,
+      warnings: [`AI 의도 분석 실패: ${translateError(error.message)}`],
+    });
+    setStatus(`AI 의도 분석 실패: ${translateError(error.message)}`);
+  } finally {
+    aiAssistButton.disabled = false;
+    aiAssistButton.textContent = "AI 의도 파악";
+  }
+}
+
+function renderAIWaiting() {
+  aiSuggestionsEl.hidden = false;
+  aiSuggestionsEl.replaceChildren();
+  const note = document.createElement("p");
+  note.textContent = "로컬 AI 서버에서 사운드 의도를 분석하는 중입니다.";
+  aiSuggestionsEl.append(note);
+}
+
+function renderAISearchAssist(data) {
+  aiSuggestionsEl.replaceChildren();
+  aiSuggestionsEl.hidden = false;
+
+  const title = document.createElement("span");
+  title.className = "suggestion-panel-label";
+  title.textContent = data.enabled ? "AI 의도 분석" : "AI 사용 불가";
+  aiSuggestionsEl.append(title);
+
+  const summary = document.createElement("p");
+  const notes = Array.isArray(data.notes) ? data.notes : [];
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  summary.textContent = aiIntentSummary(data, notes, warnings);
+  aiSuggestionsEl.append(summary);
+
+  if (data.enabled) {
+    const meta = aiIntentMeta(data);
+    if (meta.length > 0) {
+      const metaList = document.createElement("div");
+      metaList.className = "ai-intent-meta";
+      for (const item of meta) {
+        const chip = document.createElement("span");
+        chip.textContent = item;
+        metaList.append(chip);
+      }
+      aiSuggestionsEl.append(metaList);
+    }
+
+    const avoidConcepts = Array.isArray(data.avoid_concepts) ? data.avoid_concepts : [];
+    if (avoidConcepts.length > 0) {
+      const avoid = document.createElement("p");
+      avoid.className = "ai-intent-warning";
+      avoid.textContent = `오염 가능성: ${avoidConcepts.slice(0, 6).join(", ")}`;
+      aiSuggestionsEl.append(avoid);
+    }
+  }
+
+  const suggestions = aiAssistSuggestions(data);
+  if (suggestions.length > 0) {
+    const list = document.createElement("div");
+    list.className = "suggestion-chip-list";
+    for (const suggestion of suggestions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "suggestion-chip";
+      button.textContent = suggestion.label || suggestion.prompt;
+      button.dataset.tooltip = suggestion.reason || "AI 검색식을 검색창에 입력합니다.";
+      button.addEventListener("click", () => {
+        promptInput.value = suggestion.prompt;
+        promptInput.focus();
+        scheduleLiveSearchSuggestions();
+        setStatus(`AI 검색식 입력: ${suggestion.prompt}`);
+      });
+      list.append(button);
+    }
+    aiSuggestionsEl.append(list);
+
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "ai-apply-button";
+    apply.textContent = "대표 검색식 적용";
+    apply.dataset.tooltip = "AI가 파악한 의도의 대표 검색식을 검색창에 넣습니다. 자동 검색은 하지 않습니다.";
+    apply.addEventListener("click", () => {
+      const primary = suggestions[0];
+      const originalPrompt = promptInput.value.trim();
+      promptInput.value = primary.prompt;
+      promptInput.focus();
+      applyAIIntentHints(data);
+      queueBehaviorEvent({
+        event_type: "ai_query_applied",
+        search_session_id: currentSearchSessionId,
+        prompt: originalPrompt,
+        query: primary.prompt,
+        filters: buildBehaviorFilterSnapshot(),
+        metadata: {
+          intent_label: data.intent_label || "",
+          sound_type: data.sound_type || "",
+          avoid_concepts: data.avoid_concepts || [],
+        },
+      });
+      scheduleLiveSearchSuggestions();
+      setStatus(`AI 의도 적용: ${primary.prompt}`);
+    });
+    aiSuggestionsEl.append(apply);
+  }
+
+  for (const noteText of [...notes, ...warnings].slice(0, 3)) {
+    if (!noteText || noteText === summary.textContent) {
+      continue;
+    }
+    const note = document.createElement("p");
+    note.textContent = noteText;
+    aiSuggestionsEl.append(note);
+  }
+}
+
+function aiIntentSummary(data, notes, warnings) {
+  if (!data.enabled) {
+    return warnings[0] || notes[0] || "llama.cpp 서버가 켜져 있으면 사운드 의도를 분석합니다.";
+  }
+  const label = String(data.intent_label || "").trim();
+  const translated = String(data.translated_intent || "").trim();
+  if (label && translated) {
+    return `${label} · ${translated}`;
+  }
+  return label || translated || notes[0] || "AI가 입력 의도를 검색 프로파일로 해석했습니다.";
+}
+
+function aiIntentMeta(data) {
+  const items = [];
+  const soundType = aiSoundTypeLabel(data.sound_type);
+  if (soundType) {
+    items.push(`유형: ${soundType}`);
+  }
+  const duration = aiDurationLabel(data.preferred_duration);
+  if (duration) {
+    items.push(`길이: ${duration}`);
+  }
+  const preferredSources = aiSourceLabels(data.preferred_sources || []);
+  if (preferredSources.length > 0) {
+    items.push(`우선 출처: ${preferredSources.join(", ")}`);
+  }
+  const deprioritizeSources = aiSourceLabels(data.deprioritize_sources || []);
+  if (deprioritizeSources.length > 0) {
+    items.push(`낮출 출처: ${deprioritizeSources.join(", ")}`);
+  }
+  const confidence = Number(data.confidence || 0);
+  if (confidence > 0) {
+    items.push(`확신도: ${Math.round(confidence * 100)}%`);
+  }
+  return items;
+}
+
+function aiSoundTypeLabel(value) {
+  const labels = {
+    sfx: "SFX",
+    bgm: "BGM",
+    ambience: "환경음",
+    music: "음악",
+  };
+  return labels[String(value || "").toLowerCase()] || "";
+}
+
+function aiDurationLabel(value) {
+  const labels = {
+    short: "짧음",
+    medium: "중간",
+    long: "김",
+    loop: "루프",
+    any: "무관",
+  };
+  return labels[String(value || "").toLowerCase()] || "";
+}
+
+function aiSourceLabels(values) {
+  return (Array.isArray(values) ? values : [])
+    .map((source) => SOURCE_LABELS[String(source || "").toLowerCase()] || "")
+    .filter(Boolean);
+}
+
+function applyAIIntentHints(data) {
+  const soundType = String(data.sound_type || "").toLowerCase();
+  const preferredSources = Array.isArray(data.preferred_sources) ? data.preferred_sources : [];
+  const sourceSelect = document.querySelector("#source-filter");
+  if (sourceSelect && sourceSelect.value === "all" && preferredSources.length === 1) {
+    sourceSelect.value = preferredSources[0];
+  }
+  if (soundType === "sfx") {
+    const gameReady = document.querySelector("#game-ready");
+    if (gameReady) {
+      gameReady.checked = true;
+    }
+  }
+}
+
+function aiAssistSuggestions(data) {
+  const suggestions = [];
+  const primary = String(data.primary_query || "").trim();
+  const current = promptInput.value.trim();
+  if (primary && primary.toLowerCase() !== current.toLowerCase()) {
+    suggestions.push({
+      label: primary,
+      prompt: primary,
+      reason: "AI가 파악한 의도의 대표 검색식입니다.",
+    });
+  }
+  for (const suggestion of normalizeSuggestions(data.alternative_queries || [])) {
+    suggestions.push(suggestion);
+  }
+  return normalizeSuggestions(suggestions).slice(0, 5);
+}
+
 function normalizeSuggestions(suggestions) {
   const seen = new Set();
   const currentPrompt = promptInput.value.trim().toLowerCase();
@@ -534,6 +834,18 @@ function buildSearchPayload() {
     game_ready: checkboxValue("#game-ready"),
     search_modes: selectedSearchModes(),
     use_prompt_interpretation: promptInterpretationEnabled(),
+    use_behavior_personalization: behaviorPersonalizationEnabled(),
+  };
+}
+
+function buildAISearchAssistPayload() {
+  return {
+    prompt: promptInput.value.trim(),
+    license: document.querySelector("#license").value,
+    source_filter: document.querySelector("#source-filter").value,
+    min_duration: formNumber("#min-duration", 0.1),
+    max_duration: formNumber("#max-duration", 3.0),
+    use_behavior_personalization: behaviorPersonalizationEnabled(),
   };
 }
 
@@ -1042,6 +1354,7 @@ function filenameFromUrl(url) {
 
 function setupExclusivePlayback(audio, sound) {
   audio.addEventListener("play", () => {
+    startAudioBehaviorSession(audio, sound);
     recordPlayedSound(sound);
     refreshRecentListenIndicators();
     if (!shouldSoloLongAudio(sound)) {
@@ -1053,6 +1366,58 @@ function setupExclusivePlayback(audio, sound) {
       }
     }
   });
+  audio.addEventListener("pause", () => finishAudioBehaviorSession(audio, sound, "pause"));
+  audio.addEventListener("ended", () => finishAudioBehaviorSession(audio, sound, "ended"));
+}
+
+function startAudioBehaviorSession(audio, sound) {
+  if (!behaviorPersonalizationEnabled() || isHelpDemoActive()) {
+    return;
+  }
+  audioListenState.set(audio, {
+    startedAt: performance.now(),
+    mediaTime: Number(audio.currentTime || 0),
+  });
+  queueBehaviorEvent(soundBehaviorEvent(sound, "play_started"));
+}
+
+function finishAudioBehaviorSession(audio, sound, reason = "pause") {
+  const state = audioListenState.get(audio);
+  if (!state) {
+    return;
+  }
+  audioListenState.delete(audio);
+  const elapsed = Math.max(0, (performance.now() - state.startedAt) / 1000);
+  const mediaDelta = Math.max(0, Number(audio.currentTime || 0) - Number(state.mediaTime || 0));
+  const listenSeconds = Math.max(elapsed, mediaDelta);
+  if (listenSeconds < 0.25) {
+    return;
+  }
+  const duration = Number(sound.duration || audio.duration || 0);
+  const progressRatio = duration > 0 ? clampNumber(listenSeconds / duration, 0, 1) : 0;
+  queueBehaviorEvent(
+    soundBehaviorEvent(sound, "play_finished", {
+      listen_seconds: Number(listenSeconds.toFixed(2)),
+      progress_ratio: Number(progressRatio.toFixed(3)),
+      metadata: { finish_reason: reason },
+    })
+  );
+}
+
+function finishAllAudioBehaviorSessions(reason = "flush") {
+  for (const audio of document.querySelectorAll("audio")) {
+    const context = cardContexts.get(Number(audio.closest(".sound-card")?.dataset.soundId || 0));
+    if (context?.sound) {
+      finishAudioBehaviorSession(audio, context.sound, reason);
+      continue;
+    }
+    const savedItem = audio.closest(".saved-item");
+    const savedId = Number(savedItem?.dataset.savedId || 0);
+    const savedSound = savedSounds.find((sound) => sound.saved_id === savedId);
+    if (savedSound) {
+      finishAudioBehaviorSession(audio, savedSound, reason);
+    }
+  }
 }
 
 function shouldSoloLongAudio(sound) {
@@ -1153,6 +1518,109 @@ function renderRecentListenState(node, sound) {
   note.hidden = false;
   note.textContent = info.text;
   note.dataset.tooltip = "최근 몇 번의 검색 안에서 재생한 후보입니다.";
+}
+
+function queueBehaviorEvent(event) {
+  if (!behaviorPersonalizationEnabled() || isHelpDemoActive()) {
+    return;
+  }
+  behaviorEventQueue.push(event);
+  if (behaviorEventQueue.length >= 20) {
+    flushBehaviorEvents();
+    return;
+  }
+  window.clearTimeout(behaviorFlushTimer);
+  behaviorFlushTimer = window.setTimeout(flushBehaviorEvents, 1200);
+}
+
+function soundBehaviorEvent(sound, eventType, overrides = {}) {
+  const { metadata: overrideMetadata = {}, ...eventOverrides } = overrides;
+  const metadata = {
+    name: sound.name || "",
+    tags: sound.tags || [],
+    license: sound.license || "",
+    source_provider: sound.source_provider || "freesound",
+    source_id: sound.source_id || String(sound.id || ""),
+    duration: Number(sound.duration || 0),
+    ...overrideMetadata,
+  };
+  return {
+    event_type: eventType,
+    search_session_id: currentSearchSessionId,
+    source_provider: sound.source_provider || "freesound",
+    source_id: sound.source_id || String(sound.id || ""),
+    prompt: promptInput.value.trim(),
+    query: currentSearchQuery,
+    result_rank: currentResultRank(sound),
+    duration: Number(sound.duration || 0),
+    filters: buildBehaviorFilterSnapshot(),
+    metadata,
+    ...eventOverrides,
+  };
+}
+
+function buildBehaviorFilterSnapshot() {
+  return {
+    license: document.querySelector("#license")?.value || "",
+    source_filter: document.querySelector("#source-filter")?.value || "",
+    min_duration: formNumber("#min-duration", 0.1),
+    max_duration: formNumber("#max-duration", 3.0),
+    page_size: Math.trunc(formNumber("#page-size", 20)),
+    game_ready: checkboxValue("#game-ready"),
+    search_modes: selectedSearchModes(),
+    result_sort: resultSortSelect?.value || "score",
+  };
+}
+
+function currentResultRank(sound) {
+  const identity = soundIdentity(sound);
+  const index = lastResults.findIndex((item) => soundIdentity(item) === identity);
+  return index >= 0 ? index + 1 : null;
+}
+
+async function flushBehaviorEvents() {
+  if (behaviorEventQueue.length === 0 || !behaviorPersonalizationEnabled()) {
+    return;
+  }
+  const events = behaviorEventQueue.splice(0, 100);
+  window.clearTimeout(behaviorFlushTimer);
+  behaviorFlushTimer = null;
+  try {
+    await apiFetch("/api/behavior-events", {
+      method: "POST",
+      body: JSON.stringify({ events }),
+    });
+  } catch {
+    // 행동 로그는 보조 기능이라 전송 실패가 검색 흐름을 막지 않게 둔다.
+  }
+}
+
+function flushBehaviorEventsOnUnload() {
+  finishAllAudioBehaviorSessions("unload");
+  if (behaviorEventQueue.length === 0 || !behaviorPersonalizationEnabled()) {
+    return;
+  }
+  const events = behaviorEventQueue.splice(0, 100);
+  const payload = JSON.stringify({ events });
+  fetch("/api/behavior-events", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-SoundScrapper-Workspace": workspaceId(),
+    },
+    body: payload,
+    keepalive: true,
+  }).catch(() => {});
+}
+
+async function clearBehaviorEvents() {
+  try {
+    behaviorEventQueue.length = 0;
+    await apiFetch("/api/behavior-events", { method: "DELETE" });
+    setStatus("행동 기록을 삭제했습니다.");
+  } catch (error) {
+    setStatus(`행동 기록 삭제 실패: ${translateError(error.message)}`);
+  }
 }
 
 function refreshRecentListenIndicators() {
@@ -1511,6 +1979,11 @@ function renderAttributionNote(container, sound) {
 }
 
 function triggerPreviewDownload(sound, nameOverride = null, options = {}) {
+  queueBehaviorEvent(
+    soundBehaviorEvent(sound, "sound_downloaded", {
+      metadata: { download_kind: "preview", download_name: nameOverride || sound.name || "" },
+    })
+  );
   const link = document.createElement("a");
   link.href = downloadPreviewUrl(sound, nameOverride, options);
   link.download = "";
@@ -1521,6 +1994,11 @@ function triggerPreviewDownload(sound, nameOverride = null, options = {}) {
 }
 
 function triggerOriginalDownload(sound, nameOverride = null, options = {}) {
+  queueBehaviorEvent(
+    soundBehaviorEvent(sound, "sound_downloaded", {
+      metadata: { download_kind: "original", download_name: nameOverride || sound.name || "" },
+    })
+  );
   const link = document.createElement("a");
   link.href = freesoundOriginalDownloadUrl(sound, nameOverride, options);
   link.download = "";
@@ -2525,6 +3003,8 @@ async function searchSounds(event) {
     return;
   }
 
+  currentSearchSessionId = makeSearchSessionId();
+  currentSearchQuery = "";
   setStatus("선택한 출처에서 후보를 찾는 중입니다...");
   resultsEl.replaceChildren();
 
@@ -2534,8 +3014,22 @@ async function searchSounds(event) {
       body: JSON.stringify(payload),
     });
     nextSearchSequence();
+    currentSearchQuery = data.query || "";
     lastResults = data.results;
     lastResultSuggestions = data.suggested_queries || [];
+    queueBehaviorEvent({
+      event_type: "search_submitted",
+      search_session_id: currentSearchSessionId,
+      prompt: payload.prompt,
+      query: currentSearchQuery,
+      result_rank: lastResults.length,
+      filters: payload,
+      metadata: {
+        result_count: lastResults.length,
+        source_warnings: data.source_warnings || [],
+        fallback_queries_used: data.fallback_queries_used || [],
+      },
+    });
     renderCurrentResults();
     rememberSearch(payload.prompt);
     const warningText =
@@ -2563,6 +3057,10 @@ async function searchSounds(event) {
   }
 }
 
+function makeSearchSessionId() {
+  return `search-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function saveSound(sound) {
   return apiFetch("/api/saved-sounds", {
     method: "POST",
@@ -2584,6 +3082,11 @@ async function saveSoundToFolder(sound, folderName) {
     });
   }
   upsertSavedSound(saved);
+  queueBehaviorEvent(
+    soundBehaviorEvent(sound, "sound_saved", {
+      metadata: { folder: normalizedFolder || "미분류" },
+    })
+  );
   await loadSavedFolders({ render: false });
   renderSaved();
   syncRenderedSaveStates();
@@ -2600,6 +3103,7 @@ async function removeSavedBySound(sound) {
   if (!saved) {
     return;
   }
+  queueBehaviorEvent(soundBehaviorEvent(sound, "sound_unsaved"));
   await deleteSavedSound(saved.saved_id);
   savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== saved.saved_id);
   await loadSavedFolders({ render: false });
@@ -2643,6 +3147,7 @@ async function deleteSavedItem(sound) {
     return;
   }
   try {
+    queueBehaviorEvent(soundBehaviorEvent(sound, "sound_unsaved"));
     await deleteSavedSound(sound.saved_id);
     savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== sound.saved_id);
     await loadSavedFolders({ render: false });
@@ -3356,6 +3861,8 @@ promptInterpretationInput?.addEventListener("change", () => {
   scheduleLiveSearchSuggestions();
   setStatus(promptInterpretationEnabled() ? "맥락 해석을 사용합니다." : "맥락 해석을 무시하고 원문으로 검색합니다.");
 });
+aiAssistButton?.addEventListener("click", requestAISearchAssist);
+window.addEventListener("beforeunload", flushBehaviorEventsOnUnload);
 refreshSavedButton.addEventListener("click", loadSavedSounds);
 savedPanelToggle.addEventListener("click", () => {
   const collapsed = !workspaceLayout.classList.contains("is-saved-panel-collapsed");
@@ -3397,8 +3904,10 @@ initializeHelpTour();
 initializeTooltips();
 initializeDownloadChoiceModal();
 initializeRecentListenWindow();
+initializeBehaviorPersonalization();
 applySavedPanelCollapsed(readSavedPanelCollapsed());
 renderSearchMemory();
 loadProviderStatus();
+loadAIStatus();
 loadFreesoundAuthStatus();
 loadSavedSounds();
