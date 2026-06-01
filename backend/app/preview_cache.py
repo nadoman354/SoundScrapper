@@ -7,7 +7,11 @@ from urllib.parse import urlparse
 import httpx
 
 
-ALLOWED_PREVIEW_HOST_SUFFIXES = ("freesound.org",)
+ALLOWED_PREVIEW_HOST_SUFFIXES = (
+    "freesound.org",
+    "jamendo.com",
+    "wikimedia.org",
+)
 MIME_BY_SUFFIX = {
     ".mp3": "audio/mpeg",
     ".ogg": "audio/ogg",
@@ -48,7 +52,7 @@ async def cache_preview_audio(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Path:
     if not is_allowed_preview_url(preview_url):
-        raise PreviewCacheError("Only Freesound preview URLs can be cached.")
+        raise PreviewCacheError("Only approved source preview URLs can be cached.")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     target_path = cached_preview_path(cache_dir, freesound_id, preview_url)

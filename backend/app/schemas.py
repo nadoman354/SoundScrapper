@@ -6,7 +6,33 @@ from pydantic import BaseModel, Field
 
 
 LicenseFilter = Literal["commercial", "cc0", "any"]
-FeedbackType = Literal["good", "bad", "heavy_good", "too_sharp", "magic_feel"]
+SourceFilter = Literal["all", "freesound", "jamendo", "openverse"]
+SearchMode = Literal[
+    "clean_source",
+    "short_sfx",
+    "easy_cut",
+    "loop_bgm",
+    "rights_safe",
+]
+FeedbackType = Literal[
+    "good",
+    "bad",
+    "game_like",
+    "asset_ready",
+    "heavy_good",
+    "sharp_good",
+    "clean_good",
+    "easy_cut",
+    "loop_good",
+    "noise_bad",
+    "leading_silence_bad",
+    "too_sharp",
+    "too_loud",
+    "too_long",
+    "low_quality",
+    "wrong_mood",
+    "license_risky",
+]
 
 
 class HealthResponse(BaseModel):
@@ -20,6 +46,8 @@ class SearchRequest(BaseModel):
     max_duration: float = Field(3.0, gt=0)
     page_size: int = Field(20, ge=1, le=50)
     game_ready: bool = False
+    search_modes: list[SearchMode] = Field(default_factory=list)
+    source_filter: SourceFilter = "all"
 
 
 class SoundSearchResult(BaseModel):
@@ -35,6 +63,14 @@ class SoundSearchResult(BaseModel):
     score: int = 0
     personal_score_adjustment: int = 0
     score_reasons: list[str] = Field(default_factory=list)
+    source_provider: str = "freesound"
+    source_id: str = ""
+    source_url: str | None = None
+    license_url: str | None = None
+    creator_url: str | None = None
+    attribution_text: str | None = None
+    download_url: str | None = None
+    download_allowed: bool = True
 
 
 class SoundAnalysis(BaseModel):
@@ -58,6 +94,7 @@ class SoundAnalysis(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     results: list[SoundSearchResult]
+    source_warnings: list[str] = Field(default_factory=list)
 
 
 class SavedSound(BaseModel):
@@ -73,20 +110,33 @@ class SavedSound(BaseModel):
     url: str | None = None
     description: str | None = None
     score: int = 0
+    feedback_types: list[str] = Field(default_factory=list)
+    source_provider: str = "freesound"
+    source_id: str = ""
+    source_url: str | None = None
+    license_url: str | None = None
+    creator_url: str | None = None
+    attribution_text: str | None = None
+    download_url: str | None = None
+    download_allowed: bool = True
 
 
 class FeedbackRequest(BaseModel):
     id: int
     prompt: str = ""
     feedback_type: FeedbackType
+    active: bool = True
     name: str = ""
     tags: list[str] = Field(default_factory=list)
+    source_provider: str = "freesound"
+    source_id: str = ""
 
 
 class FeedbackResponse(BaseModel):
     id: int
     freesound_id: int
     feedback_type: FeedbackType
+    active: bool = True
     created_at: str
 
 

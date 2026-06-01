@@ -1,7 +1,7 @@
 # SoundScrapper
 
 SoundScrapper is a Sound Scout MVP for finding game-ready sound candidates from
-Freesound. It provides prompt-based search, preview playback, waveform
+Freesound, Jamendo, and Openverse. It provides prompt-based search, preview playback, waveform
 inspection, license/duration filtering, saved candidates, audio analysis metrics,
 and lightweight user feedback learning backed by SQLite.
 
@@ -10,7 +10,7 @@ and lightweight user feedback learning backed by SQLite.
 - Backend: FastAPI
 - Frontend: HTML, CSS, vanilla JavaScript
 - Database: SQLite
-- Source API: Freesound APIv2 token authentication
+- Source APIs: Freesound APIv2, Jamendo API, Openverse API
 
 ## Setup
 
@@ -28,14 +28,24 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-3. Add your Freesound API key.
+3. Add source API keys.
 
 ```text
 FREESOUND_API_KEY=your_api_key_here
+JAMENDO_CLIENT_ID=your_jamendo_client_id_here
+OPENVERSE_CLIENT_ID=optional_openverse_client_id
+OPENVERSE_CLIENT_SECRET=optional_openverse_client_secret
 SOUNDSCRAPPER_DB_PATH=sound_scout.db
 SOUNDSCRAPPER_PREVIEW_CACHE_DIR=.cache/previews
 FREESOUND_BASE_URL=https://freesound.org
+JAMENDO_BASE_URL=https://api.jamendo.com/v3.0
+OPENVERSE_BASE_URL=https://api.openverse.org/v1
 ```
+
+Openverse can run without credentials when anonymous API access is available.
+Freesound and Jamendo are skipped with a UI warning when their keys are missing.
+Jamendo is best treated as a non-commercial/educational integration unless you
+have confirmed your usage terms with Jamendo.
 
 4. Run the server.
 
@@ -200,7 +210,7 @@ Included:
 - `POST /api/sound-analyses`
 - `GET /api/sound-analyses/{sound_id}`
 - `POST /api/feedback`
-- Freesound search using explicit fields
+- Freesound, Jamendo, and Openverse search with source deduplication
 - SQLite saved candidates, analysis metrics, and feedback
 - Waveform inspection from result cards
 - Lightweight feedback-based score adjustment
@@ -213,3 +223,10 @@ Not included yet:
 - React or Electron packaging
 - Heavy AI or embedding reranking
 - Authentication
+
+## License Notes
+
+SoundScrapper displays source, creator, license, and attribution hints, but it
+does not guarantee legal clearance. Check each original source page before using
+or distributing a sound. CC0 is the safest default; attribution, non-commercial,
+no-derivatives, and share-alike licenses need extra review for games.

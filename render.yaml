@@ -14,9 +14,19 @@ services:
     envVars:
       - key: FREESOUND_API_KEY
         sync: false
+      - key: JAMENDO_CLIENT_ID
+        sync: false
+      - key: OPENVERSE_CLIENT_ID
+        sync: false
+      - key: OPENVERSE_CLIENT_SECRET
+        sync: false
       - key: SOUNDSCRAPPER_DB_PATH
         value: /data/sound_scout.db
       - key: SOUNDSCRAPPER_PREVIEW_CACHE_DIR
         value: /data/previews
       - key: FREESOUND_BASE_URL
         value: https://freesound.org
+      - key: JAMENDO_BASE_URL
+        value: https://api.jamendo.com/v3.0
+      - key: OPENVERSE_BASE_URL
+        value: https://api.openverse.org/v1

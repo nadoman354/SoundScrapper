@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 import httpx
@@ -16,7 +17,9 @@ from backend.app.db import (
     save_sound,
 )
 from backend.app.freesound_client import FreesoundClient, build_filter
-from backend.app.main import create_app
+from backend.app.jamendo_client import JamendoClient
+from backend.app.main import _dedupe_results, create_app
+from backend.app.openverse_client import OpenverseClient
 from backend.app.prompt_parser import parse_prompt
 from backend.app.preview_cache import cache_preview_audio, is_allowed_preview_url
 from backend.app.ranker import score_sound
@@ -111,6 +114,107 @@ def test_ranker_game_ready_uses_cached_waveform_analysis() -> None:
     assert any("앞 무음 적음" in reason for reason in scored.score_reasons)
 
 
+def test_ranker_search_modes_boost_matching_conditions() -> None:
+    parsed = parse_prompt("button click")
+    clean_short = SoundSearchResult(
+        id=5,
+        name="Clean UI Click SFX",
+        license="Creative Commons 0",
+        duration=0.25,
+        tags=["clean", "ui", "click", "sfx"],
+        preview_url="https://example.com/click.mp3",
+    )
+
+    scored = score_sound(
+        clean_short,
+        parsed,
+        min_duration=0.1,
+        max_duration=5,
+        search_modes=["clean_source", "short_sfx", "rights_safe"],
+    )
+
+    assert any("깨끗한 소스" in reason for reason in scored.score_reasons)
+    assert any("짧은 원샷" in reason for reason in scored.score_reasons)
+    assert any("저작권 안전" in reason for reason in scored.score_reasons)
+
+
+def test_ranker_source_weighting_for_sfx_and_bgm() -> None:
+    parsed = parse_prompt("loop bgm")
+    jamendo_track = SoundSearchResult(
+        id=1001,
+        name="Adventure Loop",
+        license="CC BY",
+        duration=90,
+        tags=["music", "loop"],
+        source_provider="jamendo",
+        source_id="1001",
+    )
+
+    scored = score_sound(
+        jamendo_track,
+        parsed,
+        min_duration=1,
+        max_duration=120,
+        search_modes=["loop_bgm", "rights_safe"],
+    )
+
+    assert any("Jamendo BGM 후보" in reason for reason in scored.score_reasons)
+    assert any("저작자 표시 라이선스" in reason for reason in scored.score_reasons)
+
+
+def test_ranker_search_modes_penalize_conflicting_audio() -> None:
+    parsed = parse_prompt("bgm loop")
+    tiny_sfx = SoundSearchResult(
+        id=6,
+        name="Tiny Explosion SFX",
+        license="Attribution",
+        duration=0.4,
+        tags=["explosion", "sfx"],
+        preview_url="https://example.com/explosion.mp3",
+    )
+
+    scored = score_sound(
+        tiny_sfx,
+        parsed,
+        min_duration=0.1,
+        max_duration=10,
+        search_modes=["loop_bgm"],
+    )
+
+    assert any("루프/BGM으로는 짧음" in reason for reason in scored.score_reasons)
+    assert any("짧은 SFX 단서" in reason for reason in scored.score_reasons)
+
+
+def test_ranker_easy_cut_mode_uses_waveform_analysis() -> None:
+    parsed = parse_prompt("impact")
+    result = SoundSearchResult(
+        id=7,
+        name="Separated Impact",
+        license="Creative Commons 0",
+        duration=2,
+        tags=["impact"],
+        preview_url="https://example.com/impact.mp3",
+    )
+    analysis = SoundAnalysis(
+        id=7,
+        preview_url="https://example.com/impact.mp3",
+        duration=2,
+        waveform=[0, 0.8, 0.7, 0.02, 0.01, 0.82, 0.65, 0.01],
+        leading_silence_seconds=0.05,
+    )
+
+    scored = score_sound(
+        result,
+        parsed,
+        min_duration=0.1,
+        max_duration=5,
+        search_modes=["easy_cut"],
+        analysis=analysis,
+    )
+
+    assert any("파형 이벤트 분리" in reason for reason in scored.score_reasons)
+
+
 def test_db_save_and_list_round_trip(tmp_path: Path) -> None:
     database_path = tmp_path / "sounds.db"
     sound = SoundSearchResult(
@@ -129,6 +233,37 @@ def test_db_save_and_list_round_trip(tmp_path: Path) -> None:
     assert saved.id == 10
     assert listed[0].name == "Click"
     assert listed[0].tags == ["button", "click"]
+    assert listed[0].source_provider == "freesound"
+    assert listed[0].source_id == "10"
+
+
+def test_saved_sounds_include_feedback_types(tmp_path: Path) -> None:
+    database_path = tmp_path / "saved-feedback.db"
+    sound = SoundSearchResult(
+        id=11,
+        name="Good Click",
+        username="tester",
+        license="Creative Commons 0",
+        duration=0.2,
+        tags=["ui", "click"],
+        score=88,
+    )
+
+    save_sound(database_path, sound)
+    save_feedback(
+        database_path,
+        FeedbackRequest(
+            id=11,
+            prompt="ui click",
+            feedback_type="good",
+            name="Good Click",
+            tags=["ui", "click"],
+        ),
+    )
+
+    listed = list_saved_sounds(database_path)
+
+    assert listed[0].feedback_types == ["good"]
 
 
 def test_api_health_and_saved_sounds(tmp_path: Path) -> None:
@@ -160,7 +295,43 @@ def test_api_health_and_saved_sounds(tmp_path: Path) -> None:
     assert client.get("/api/saved-sounds").json()[0]["id"] == 20
 
 
-def test_search_without_api_key_returns_503(tmp_path: Path) -> None:
+def test_download_preview_returns_attachment(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "download.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    preview_path = tmp_path / "previews" / "42.mp3"
+    preview_path.parent.mkdir(parents=True)
+    preview_path.write_bytes(b"audio")
+
+    async def fake_cache_preview_audio(cache_dir: Path, sound_id: int, preview_url: str) -> Path:
+        assert cache_dir == settings.preview_cache_dir
+        assert sound_id == 42
+        assert preview_url == "https://cdn.freesound.org/previews/42.mp3"
+        return preview_path
+
+    monkeypatch.setattr("backend.app.main.cache_preview_audio", fake_cache_preview_audio)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/download-preview/42",
+        params={
+            "preview_url": "https://cdn.freesound.org/previews/42.mp3",
+            "name": "Big Boom!",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"audio"
+    assert response.headers["content-type"] == "audio/mpeg"
+    assert "attachment" in response.headers["content-disposition"]
+    assert "42" in response.headers["content-disposition"]
+
+
+def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:
     settings = Settings(
         freesound_api_key=None,
         database_path=tmp_path / "missing-key.db",
@@ -170,10 +341,14 @@ def test_search_without_api_key_returns_503(tmp_path: Path) -> None:
     app = create_app(settings)
     client = TestClient(app)
 
-    response = client.post("/api/search", json={"prompt": "boom"})
+    response = client.post(
+        "/api/search",
+        json={"prompt": "boom", "source_filter": "freesound"},
+    )
 
-    assert response.status_code == 503
-    assert "FREESOUND_API_KEY" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+    assert "Freesound API 키" in response.json()["source_warnings"][0]
 
 
 def test_freesound_client_uses_search_endpoint_and_fields() -> None:
@@ -218,6 +393,162 @@ def test_freesound_client_uses_search_endpoint_and_fields() -> None:
 
     assert results[0].id == 99
     assert results[0].preview_url == "https://example.com/boom.mp3"
+    assert results[0].source_provider == "freesound"
+    assert results[0].source_id == "99"
+
+
+def test_jamendo_client_normalizes_tracks_and_download_policy() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/tracks/"
+        assert request.url.params["client_id"] == "jamendo-id"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "123",
+                        "name": "Loop Song",
+                        "artist_name": "Composer",
+                        "artist_id": "77",
+                        "artist_idstr": "composer",
+                        "duration": 64,
+                        "audio": "https://prod-1.storage.jamendo.com/previews/123.mp3",
+                        "audiodownload": "https://prod-1.storage.jamendo.com/download/123.mp3",
+                        "audiodownload_allowed": True,
+                        "shareurl": "https://www.jamendo.com/track/123/loop-song",
+                        "license_ccurl": "https://creativecommons.org/licenses/by/4.0/",
+                        "musicinfo": {"tags": {"genres": ["cinematic", "game"]}},
+                    }
+                ]
+            },
+        )
+
+    client = JamendoClient(
+        client_id="jamendo-id",
+        base_url="https://jamendo.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    results = asyncio.run(
+        client.search(
+            query="loop",
+            license_filter="commercial",
+            min_duration=1,
+            max_duration=120,
+            page_size=5,
+        )
+    )
+
+    assert results[0].source_provider == "jamendo"
+    assert results[0].source_id == "123"
+    assert results[0].license == "CC BY"
+    assert results[0].download_allowed is True
+    assert results[0].download_url is not None
+
+
+def test_jamendo_download_disabled_when_api_denies_download() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "124",
+                        "name": "Preview Only",
+                        "artist_name": "Composer",
+                        "duration": 30,
+                        "audio": "https://prod-1.storage.jamendo.com/previews/124.mp3",
+                        "audiodownload_allowed": False,
+                        "license_ccurl": "https://creativecommons.org/licenses/by/4.0/",
+                    }
+                ]
+            },
+        )
+
+    client = JamendoClient(
+        client_id="jamendo-id",
+        base_url="https://jamendo.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = asyncio.run(client.search("loop", "commercial", 1, 120, 5))[0]
+
+    assert result.preview_url is not None
+    assert result.download_allowed is False
+    assert result.download_url is None
+
+
+def test_openverse_client_normalizes_audio_and_extracts_freesound_identity() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/audio/"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "openverse-id",
+                        "title": "Open Boom",
+                        "creator": "Creator",
+                        "source": "freesound",
+                        "foreign_identifier": "99",
+                        "foreign_landing_url": "https://freesound.org/s/99/",
+                        "url": "https://cdn.freesound.org/previews/99.mp3",
+                        "duration": 7000,
+                        "license": "by",
+                        "license_version": "4.0",
+                        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                        "tags": [{"name": "boom"}],
+                    }
+                ]
+            },
+        )
+
+    client = OpenverseClient(
+        base_url="https://openverse.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    results = asyncio.run(client.search("boom", "commercial", 0.1, 10, 5))
+
+    assert results[0].source_provider == "freesound"
+    assert results[0].source_id == "99"
+    assert results[0].id == 99
+    assert results[0].preview_url == "https://cdn.freesound.org/previews/99.mp3"
+
+
+def test_openverse_client_uses_client_credentials_when_configured() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/auth_tokens/token/":
+            return httpx.Response(200, json={"access_token": "openverse-token"})
+        assert request.headers["Authorization"] == "Bearer openverse-token"
+        return httpx.Response(200, json={"results": []})
+
+    client = OpenverseClient(
+        client_id="client-id",
+        client_secret="client-secret",
+        base_url="https://openverse.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert asyncio.run(client.search("boom", "any", 0, 10, 5)) == []
+
+
+def test_dedupe_prefers_direct_provider_over_openverse_duplicate() -> None:
+    direct = SoundSearchResult(
+        id=99,
+        name="Direct",
+        source_provider="freesound",
+        source_id="99",
+        preview_url="https://cdn.freesound.org/previews/99.mp3",
+    )
+    openverse_duplicate = SoundSearchResult(
+        id=99,
+        name="Openverse Copy",
+        source_provider="freesound",
+        source_id="99",
+    )
+
+    assert _dedupe_results([direct, openverse_duplicate]) == [direct]
 
 
 def test_build_filter_variants() -> None:
@@ -274,6 +605,173 @@ def test_feedback_adjusts_related_results(tmp_path: Path) -> None:
     )
 
     assert feedback_adjustment(database_path, result) > 0
+
+
+def test_feedback_good_and_bad_are_mutually_exclusive(tmp_path: Path) -> None:
+    database_path = tmp_path / "exclusive-feedback.db"
+    base = {
+        "id": 1,
+        "prompt": "ui click",
+        "name": "UI Click",
+        "tags": ["ui", "click"],
+    }
+
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="good"))
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="bad"))
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            "SELECT feedback_type FROM sound_feedback WHERE freesound_id = ?",
+            (1,),
+        ).fetchall()
+
+    assert [row[0] for row in rows] == ["bad"]
+
+
+def test_feedback_feature_tags_can_coexist(tmp_path: Path) -> None:
+    database_path = tmp_path / "coexisting-feedback.db"
+    base = {
+        "id": 1,
+        "prompt": "sharp heavy impact",
+        "name": "Sharp Heavy Impact",
+        "tags": ["sharp", "heavy", "impact"],
+    }
+
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="heavy_good"))
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="sharp_good"))
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="asset_ready"))
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT feedback_type
+            FROM sound_feedback
+            WHERE freesound_id = ?
+            ORDER BY feedback_type
+            """,
+            (1,),
+        ).fetchall()
+
+    assert [row[0] for row in rows] == ["asset_ready", "heavy_good", "sharp_good"]
+
+
+def test_feedback_can_be_deactivated(tmp_path: Path) -> None:
+    database_path = tmp_path / "deactivated-feedback.db"
+    request = FeedbackRequest(
+        id=1,
+        prompt="clean click",
+        feedback_type="clean_good",
+        name="Clean Click",
+        tags=["clean", "click"],
+    )
+
+    save_feedback(database_path, request)
+    response = save_feedback(
+        database_path,
+        FeedbackRequest(
+            id=request.id,
+            prompt=request.prompt,
+            feedback_type=request.feedback_type,
+            active=False,
+            name=request.name,
+            tags=request.tags,
+        ),
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        count = connection.execute("SELECT COUNT(*) FROM sound_feedback").fetchone()[0]
+
+    assert response.active is False
+    assert count == 0
+
+
+def test_negative_feedback_reason_types_are_stored(tmp_path: Path) -> None:
+    database_path = tmp_path / "negative-reasons.db"
+    base = {
+        "id": 1,
+        "prompt": "impact",
+        "name": "Loud Impact",
+        "tags": ["impact"],
+    }
+
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="too_loud"))
+    save_feedback(database_path, FeedbackRequest(**base, feedback_type="wrong_mood"))
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT feedback_type
+            FROM sound_feedback
+            WHERE freesound_id = ?
+            ORDER BY feedback_type
+            """,
+            (1,),
+        ).fetchall()
+
+    assert [row[0] for row in rows] == ["too_loud", "wrong_mood"]
+
+
+def test_related_negative_feedback_is_capped(tmp_path: Path) -> None:
+    database_path = tmp_path / "negative-cap.db"
+    for index in range(12):
+        save_feedback(
+            database_path,
+            FeedbackRequest(
+                id=index + 1,
+                prompt="boom",
+                feedback_type="noise_bad",
+                name=f"Noisy Boom {index}",
+                tags=["boom", "noise"],
+            ),
+        )
+
+    result = SoundSearchResult(id=99, name="Clean Boom", tags=["boom"])
+
+    assert feedback_adjustment(database_path, result) == -10
+
+
+def test_feedback_uses_cached_analysis_for_future_searches(tmp_path: Path) -> None:
+    database_path = tmp_path / "analysis-feedback.db"
+    save_analysis(
+        database_path,
+        SoundAnalysis(
+            id=1,
+            preview_url="https://cdn.freesound.org/previews/1.mp3",
+            duration=1.2,
+            waveform=[0.0, 0.8, 0.7, 0.04, 0.02],
+            leading_silence_seconds=0.03,
+            low_ratio=0.7,
+            high_ratio=0.1,
+            heaviness_score=88,
+            sharpness_score=35,
+            emptiness_score=8,
+        ),
+    )
+    save_feedback(
+        database_path,
+        FeedbackRequest(
+            id=1,
+            prompt="heavy impact",
+            feedback_type="heavy_good",
+            name="Heavy Impact",
+            tags=["impact"],
+        ),
+    )
+    candidate_analysis = SoundAnalysis(
+        id=2,
+        preview_url="https://cdn.freesound.org/previews/2.mp3",
+        duration=1.1,
+        waveform=[0.0, 0.76, 0.68, 0.05, 0.02],
+        leading_silence_seconds=0.04,
+        low_ratio=0.68,
+        high_ratio=0.12,
+        heaviness_score=84,
+        sharpness_score=38,
+        emptiness_score=10,
+    )
+    result = SoundSearchResult(id=2, name="New Impact", tags=["impact"])
+
+    assert feedback_adjustment(database_path, result, analysis=candidate_analysis) > 0
 
 
 def test_preview_cache_rejects_non_freesound_url(tmp_path: Path) -> None:

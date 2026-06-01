@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from backend.app.schemas import LicenseFilter, SoundSearchResult
+from backend.app.source_identity import stable_sound_id
 
 
 FREESOUND_FIELDS = "id,name,username,license,duration,tags,previews,url,description"
@@ -70,11 +71,12 @@ def build_filter(license_filter: LicenseFilter, min_duration: float, max_duratio
 
 
 def normalize_sound(item: Mapping[str, Any]) -> SoundSearchResult:
+    source_id = str(item.get("id", 0))
     previews = item.get("previews")
     preview_url = _select_preview(previews if isinstance(previews, Mapping) else {})
 
     return SoundSearchResult(
-        id=int(item.get("id", 0)),
+        id=stable_sound_id("freesound", source_id),
         name=str(item.get("name") or "Untitled sound"),
         username=str(item.get("username") or ""),
         license=str(item.get("license") or ""),
@@ -83,6 +85,15 @@ def normalize_sound(item: Mapping[str, Any]) -> SoundSearchResult:
         preview_url=preview_url,
         url=str(item.get("url")) if item.get("url") else None,
         description=str(item.get("description")) if item.get("description") else None,
+        source_provider="freesound",
+        source_id=source_id,
+        source_url=str(item.get("url")) if item.get("url") else None,
+        creator_url=f"https://freesound.org/people/{item.get('username')}/"
+        if item.get("username")
+        else None,
+        attribution_text=_attribution_text(item),
+        download_url=preview_url,
+        download_allowed=bool(preview_url),
     )
 
 
@@ -93,3 +104,9 @@ def _select_preview(previews: Mapping[str, Any]) -> str | None:
             return str(value)
     return None
 
+
+def _attribution_text(item: Mapping[str, Any]) -> str:
+    name = str(item.get("name") or "Untitled sound")
+    username = str(item.get("username") or "Unknown creator")
+    license_name = str(item.get("license") or "Unknown license")
+    return f"{name} by {username} ({license_name})"

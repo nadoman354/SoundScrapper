@@ -56,3 +56,12 @@ Reason:
   subdomain is enough for private sharing.
 - DuckDNS avoids paid domain registration while giving a readable URL.
 - This remains a link-shared deployment, not an authenticated public product.
+
+### Keep deployment as a limited non-commercial sharing tool
+Reason:
+- The current goal is a graduation project and a tool for sharing with
+  acquaintances, not a public paid service.
+- Keeping access limited reduces server cost, outbound audio traffic, API
+  usage, license-support burden, and abuse risk.
+- Monetization, larger infrastructure, and provider contract review should be
+  revisited only after a clear business strategy exists.

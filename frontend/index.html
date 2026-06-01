@@ -31,6 +31,17 @@
               required
             />
           </label>
+          <div class="search-memory">
+            <button id="favorite-search" type="button">현재 검색어 즐겨찾기</button>
+            <div class="memory-row">
+              <span>최근</span>
+              <div id="recent-searches" class="memory-list"></div>
+            </div>
+            <div class="memory-row">
+              <span>즐겨찾기</span>
+              <div id="favorite-searches" class="memory-list"></div>
+            </div>
+          </div>
 
           <div class="filters">
             <label>
@@ -39,6 +50,16 @@
                 <option value="commercial" selected>상업 사용 우선</option>
                 <option value="cc0">CC0만</option>
                 <option value="any">전체</option>
+              </select>
+            </label>
+
+            <label>
+              <span>출처</span>
+              <select id="source-filter" name="source-filter">
+                <option value="all" selected>전체</option>
+                <option value="freesound">Freesound</option>
+                <option value="jamendo">Jamendo</option>
+                <option value="openverse">Openverse</option>
               </select>
             </label>
 
@@ -86,6 +107,34 @@
 
             <button type="submit">검색</button>
           </div>
+
+          <fieldset class="condition-toggles" aria-describedby="condition-warning">
+            <legend>자주 쓰는 조건</legend>
+            <label class="condition-chip">
+              <input type="checkbox" data-search-mode="clean_source" />
+              <span>깨끗한 소스</span>
+            </label>
+            <label class="condition-chip">
+              <input type="checkbox" data-search-mode="short_sfx" />
+              <span>짧은 원샷 SFX</span>
+            </label>
+            <label class="condition-chip">
+              <input type="checkbox" data-search-mode="easy_cut" />
+              <span>컷오프 쉬움</span>
+            </label>
+            <label class="condition-chip">
+              <input type="checkbox" data-search-mode="loop_bgm" />
+              <span>루프/BGM 후보</span>
+            </label>
+            <label class="condition-chip">
+              <input type="checkbox" data-search-mode="rights_safe" />
+              <span>저작권 안전 우선</span>
+            </label>
+            <label class="condition-chip">
+              <input id="auto-analyze" type="checkbox" />
+              <span>상위 5개 자동 파형 분석</span>
+            </label>
+          </fieldset>
         </form>
       </section>
 
@@ -93,6 +142,7 @@
         <div id="status">검색어를 입력하세요.</div>
         <button id="refresh-saved" type="button">저장 목록 새로고침</button>
       </section>
+      <div id="condition-warning" class="condition-warning" aria-live="polite"></div>
 
       <section class="content-grid">
         <section class="results-panel">
@@ -102,6 +152,23 @@
 
         <aside class="saved-panel">
           <h2>저장한 후보</h2>
+          <div class="saved-controls">
+            <input id="saved-filter" type="search" placeholder="저장 후보 필터" />
+            <select id="saved-sort" aria-label="저장 후보 정렬">
+              <option value="recent">최근 저장순</option>
+              <option value="score">점수 높은 순</option>
+              <option value="duration_asc">짧은 순</option>
+              <option value="duration_desc">긴 순</option>
+            </select>
+            <label>
+              <input id="saved-cc0" type="checkbox" />
+              <span>CC0만</span>
+            </label>
+            <label>
+              <input id="saved-good" type="checkbox" />
+              <span>좋음 평가만</span>
+            </label>
+          </div>
           <div id="saved" class="saved-list"></div>
         </aside>
       </section>
@@ -111,12 +178,17 @@
       <article class="sound-card">
         <div class="card-head">
           <div>
+            <span class="source-badge"></span>
             <h3></h3>
             <p class="meta"></p>
           </div>
           <strong class="score" aria-label="점수"></strong>
         </div>
+        <div class="loud-warning" hidden>청취 주의: 음량이 큼</div>
         <audio controls preload="none"></audio>
+        <p class="license-note"></p>
+        <p class="attribution-note"></p>
+        <div class="fit-badges"></div>
         <div class="score-reasons"></div>
         <div class="waveform-panel" hidden>
           <canvas class="waveform-canvas" width="640" height="96"></canvas>
@@ -134,18 +206,54 @@
           <span class="loop-status">루프 꺼짐</span>
         </div>
         <div class="feedback-actions" aria-label="사용자 평가">
-          <button type="button" data-feedback="good" aria-pressed="false">좋음</button>
-          <button type="button" data-feedback="bad" aria-pressed="false">별로</button>
-          <button type="button" data-feedback="heavy_good" aria-pressed="false">묵직함 좋음</button>
-          <button type="button" data-feedback="too_sharp" aria-pressed="false">너무 날카로움</button>
-          <button type="button" data-feedback="magic_feel" aria-pressed="false">마법 느낌 있음</button>
+          <div class="feedback-group" aria-label="전체 평가">
+            <span class="feedback-title">전체</span>
+            <button type="button" data-feedback="good" data-feedback-group="preference" aria-pressed="false">좋음</button>
+            <button type="button" data-feedback="bad" data-feedback-group="preference" aria-pressed="false">별로</button>
+          </div>
+          <div class="feedback-group" aria-label="활용성 평가">
+            <span class="feedback-title">활용성</span>
+            <button type="button" data-feedback="game_like" aria-pressed="false">게임적임</button>
+            <button type="button" data-feedback="asset_ready" aria-pressed="false">에셋활용 가능</button>
+            <button type="button" data-feedback="easy_cut" aria-pressed="false">컷오프 쉬움</button>
+            <button type="button" data-feedback="loop_good" aria-pressed="false">루프 좋음</button>
+          </div>
+          <div class="feedback-group" aria-label="음색 평가">
+            <span class="feedback-title">음색</span>
+            <button type="button" data-feedback="heavy_good" aria-pressed="false">묵직함 좋음</button>
+            <button type="button" data-feedback="sharp_good" aria-pressed="false">날카로움 좋음</button>
+            <button type="button" data-feedback="clean_good" aria-pressed="false">깨끗함</button>
+          </div>
+          <div class="feedback-group bad-reasons" aria-label="마음에 안 든 점" hidden>
+            <span class="feedback-title">마음에 안 든 점</span>
+            <button type="button" data-feedback="noise_bad" aria-pressed="false">잡음 많음</button>
+            <button type="button" data-feedback="leading_silence_bad" aria-pressed="false">앞 무음 김</button>
+            <button type="button" data-feedback="too_sharp" aria-pressed="false">너무 날카로움</button>
+            <button type="button" data-feedback="too_loud" aria-pressed="false">너무 큼</button>
+            <button type="button" data-feedback="too_long" aria-pressed="false">너무 김</button>
+            <button type="button" data-feedback="low_quality" aria-pressed="false">품질 낮음</button>
+            <button type="button" data-feedback="wrong_mood" aria-pressed="false">느낌 안 맞음</button>
+            <button type="button" data-feedback="license_risky" aria-pressed="false">라이선스 불안</button>
+          </div>
         </div>
         <div class="card-actions">
           <a target="_blank" rel="noreferrer">원본 보기</a>
+          <button type="button" data-action="download">다운로드</button>
           <button type="button" data-action="save">저장</button>
         </div>
       </article>
     </template>
+
+    <footer class="site-footer">
+      <div>
+        <strong>Data sources</strong>
+        <a href="https://freesound.org/" target="_blank" rel="noreferrer">Freesound</a>
+        <a href="https://www.jamendo.com/" target="_blank" rel="noreferrer">Jamendo</a>
+        <a href="https://openverse.org/" target="_blank" rel="noreferrer">Openverse</a>
+      </div>
+      <p>개별 음원의 저작자 표기와 라이선스는 각 카드의 원본 페이지를 기준으로 확인하세요.</p>
+      <p>Contact: <a href="mailto:soundscrapper.contact@gmail.com">soundscrapper.contact@gmail.com</a></p>
+    </footer>
 
     <script src="/static/app.js" defer></script>
   </body>

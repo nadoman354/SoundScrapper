@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS saved_sounds (
     url TEXT,
     description TEXT,
     score INTEGER NOT NULL DEFAULT 0,
+    source_provider TEXT NOT NULL DEFAULT 'freesound',
+    source_id TEXT NOT NULL DEFAULT '',
+    source_url TEXT,
+    license_url TEXT,
+    creator_url TEXT,
+    attribution_text TEXT,
+    download_url TEXT,
+    download_allowed INTEGER NOT NULL DEFAULT 1,
     saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -54,6 +62,8 @@ CREATE TABLE IF NOT EXISTS sound_feedback (
     feedback_type TEXT NOT NULL,
     name TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '[]',
+    source_provider TEXT NOT NULL DEFAULT 'freesound',
+    source_id TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -63,12 +73,16 @@ def initialize_db(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database_path) as connection:
         connection.executescript(SCHEMA)
+        _ensure_saved_source_columns(connection)
+        _ensure_feedback_source_columns(connection)
         connection.commit()
 
 
 def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
     initialize_db(database_path)
     tags = json.dumps(sound.tags, ensure_ascii=False)
+    source_provider = sound.source_provider or "freesound"
+    source_id = sound.source_id or str(sound.id)
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -76,10 +90,13 @@ def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
             """
             INSERT INTO saved_sounds (
                 freesound_id, name, username, license, duration, tags,
-                preview_url, url, description, score
+                preview_url, url, description, score, source_provider, source_id,
+                source_url, license_url, creator_url, attribution_text, download_url,
+                download_allowed
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(freesound_id) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_provider, source_id) DO UPDATE SET
+                freesound_id = excluded.freesound_id,
                 name = excluded.name,
                 username = excluded.username,
                 license = excluded.license,
@@ -89,6 +106,12 @@ def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
                 url = excluded.url,
                 description = excluded.description,
                 score = excluded.score,
+                source_url = excluded.source_url,
+                license_url = excluded.license_url,
+                creator_url = excluded.creator_url,
+                attribution_text = excluded.attribution_text,
+                download_url = excluded.download_url,
+                download_allowed = excluded.download_allowed,
                 saved_at = CURRENT_TIMESTAMP
             """,
             (
@@ -102,12 +125,31 @@ def save_sound(database_path: Path, sound: SoundSearchResult) -> SavedSound:
                 sound.url,
                 sound.description,
                 sound.score,
+                source_provider,
+                source_id,
+                sound.source_url,
+                sound.license_url,
+                sound.creator_url,
+                sound.attribution_text,
+                sound.download_url,
+                int(sound.download_allowed),
             ),
         )
         connection.commit()
         row = connection.execute(
-            "SELECT * FROM saved_sounds WHERE freesound_id = ?",
-            (sound.id,),
+            """
+            SELECT
+                saved_sounds.*,
+                (
+                    SELECT GROUP_CONCAT(DISTINCT feedback_type)
+                    FROM sound_feedback
+                    WHERE sound_feedback.source_provider = saved_sounds.source_provider
+                        AND sound_feedback.source_id = saved_sounds.source_id
+                ) AS feedback_types
+            FROM saved_sounds
+            WHERE source_provider = ? AND source_id = ?
+            """,
+            (source_provider, source_id),
         ).fetchone()
 
     return _row_to_saved_sound(row)
@@ -118,7 +160,18 @@ def list_saved_sounds(database_path: Path) -> list[SavedSound]:
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
-            "SELECT * FROM saved_sounds ORDER BY saved_at DESC, id DESC"
+            """
+            SELECT
+                saved_sounds.*,
+                (
+                    SELECT GROUP_CONCAT(DISTINCT feedback_type)
+                    FROM sound_feedback
+                    WHERE sound_feedback.source_provider = saved_sounds.source_provider
+                        AND sound_feedback.source_id = saved_sounds.source_id
+                ) AS feedback_types
+            FROM saved_sounds
+            ORDER BY saved_at DESC, id DESC
+            """
         ).fetchall()
 
     return [_row_to_saved_sound(row) for row in rows]
@@ -195,13 +248,42 @@ def get_analysis(database_path: Path, freesound_id: int) -> SoundAnalysis | None
 def save_feedback(database_path: Path, feedback: FeedbackRequest) -> FeedbackResponse:
     initialize_db(database_path)
     tags = json.dumps(feedback.tags, ensure_ascii=False)
+    source_provider = feedback.source_provider or "freesound"
+    source_id = feedback.source_id or str(feedback.id)
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
+        exclusive_types = _exclusive_feedback_types(feedback.feedback_type)
+        if exclusive_types:
+            connection.execute(
+                _delete_feedback_sql(len(exclusive_types)),
+                (source_provider, source_id, *exclusive_types),
+            )
+
+        connection.execute(
+            """
+            DELETE FROM sound_feedback
+            WHERE source_provider = ? AND source_id = ? AND feedback_type = ?
+            """,
+            (source_provider, source_id, feedback.feedback_type),
+        )
+
+        if not feedback.active:
+            connection.commit()
+            return FeedbackResponse(
+                id=0,
+                freesound_id=feedback.id,
+                feedback_type=feedback.feedback_type,
+                active=False,
+                created_at="",
+            )
+
         cursor = connection.execute(
             """
-            INSERT INTO sound_feedback (freesound_id, prompt, feedback_type, name, tags)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sound_feedback (
+                freesound_id, prompt, feedback_type, name, tags, source_provider, source_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 feedback.id,
@@ -209,6 +291,8 @@ def save_feedback(database_path: Path, feedback: FeedbackRequest) -> FeedbackRes
                 feedback.feedback_type,
                 feedback.name,
                 tags,
+                source_provider,
+                source_id,
             ),
         )
         connection.commit()
@@ -221,27 +305,51 @@ def save_feedback(database_path: Path, feedback: FeedbackRequest) -> FeedbackRes
         id=row["id"],
         freesound_id=row["freesound_id"],
         feedback_type=row["feedback_type"],
+        active=True,
         created_at=row["created_at"],
     )
 
 
-def feedback_adjustment(database_path: Path, result: SoundSearchResult) -> int:
+def feedback_adjustment(
+    database_path: Path,
+    result: SoundSearchResult,
+    analysis: SoundAnalysis | None = None,
+) -> int:
     initialize_db(database_path)
     tags = {tag.lower() for tag in result.tags}
     name_terms = {term for term in result.name.lower().replace("_", " ").split() if len(term) > 2}
+    source_provider = result.source_provider or "freesound"
+    source_id = result.source_id or str(result.id)
     adjustment = 0
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         exact_rows = connection.execute(
-            "SELECT feedback_type FROM sound_feedback WHERE freesound_id = ?",
-            (result.id,),
+            """
+            SELECT feedback_type
+            FROM sound_feedback
+            WHERE source_provider = ? AND source_id = ?
+            """,
+            (source_provider, source_id),
         ).fetchall()
         related_rows = connection.execute(
             """
-            SELECT feedback_type, name, tags
+            SELECT
+                sound_feedback.feedback_type,
+                sound_feedback.name,
+                sound_feedback.tags,
+                sound_analyses.duration,
+                sound_analyses.waveform,
+                sound_analyses.leading_silence_seconds,
+                sound_analyses.low_ratio,
+                sound_analyses.high_ratio,
+                sound_analyses.heaviness_score,
+                sound_analyses.sharpness_score,
+                sound_analyses.emptiness_score
             FROM sound_feedback
-            ORDER BY created_at DESC
+            LEFT JOIN sound_analyses
+                ON sound_feedback.freesound_id = sound_analyses.freesound_id
+            ORDER BY sound_feedback.created_at DESC
             LIMIT 120
             """
         ).fetchall()
@@ -249,20 +357,26 @@ def feedback_adjustment(database_path: Path, result: SoundSearchResult) -> int:
     for row in exact_rows:
         adjustment += _feedback_weight(row["feedback_type"]) * 3
 
+    related_positive = 0
+    related_negative = 0
     for row in related_rows:
-        feedback_tags = {tag.lower() for tag in json.loads(row["tags"] or "[]")}
-        feedback_name_terms = {
-            term for term in row["name"].lower().replace("_", " ").split() if len(term) > 2
-        }
-        overlap = len(tags & feedback_tags) + len(name_terms & feedback_name_terms)
-        if overlap:
-            adjustment += min(2, overlap) * _feedback_weight(row["feedback_type"])
+        related_adjustment = _related_feedback_adjustment(row, tags, name_terms, analysis)
+        if related_adjustment > 0:
+            related_positive += related_adjustment
+        elif related_adjustment < 0:
+            related_negative += related_adjustment
+
+    adjustment += min(18, related_positive)
+    adjustment += max(-10, related_negative)
 
     return max(-25, min(25, adjustment))
 
 
 def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
     tags = json.loads(row["tags"]) if row["tags"] else []
+    feedback_types = []
+    if "feedback_types" in row.keys() and row["feedback_types"]:
+        feedback_types = [item for item in row["feedback_types"].split(",") if item]
     return SavedSound(
         saved_id=row["id"],
         saved_at=row["saved_at"],
@@ -276,6 +390,15 @@ def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
         url=row["url"],
         description=row["description"],
         score=row["score"],
+        feedback_types=feedback_types,
+        source_provider=row["source_provider"],
+        source_id=row["source_id"],
+        source_url=row["source_url"],
+        license_url=row["license_url"],
+        creator_url=row["creator_url"],
+        attribution_text=row["attribution_text"],
+        download_url=row["download_url"],
+        download_allowed=bool(row["download_allowed"]),
     )
 
 
@@ -302,12 +425,178 @@ def _row_to_analysis(row: sqlite3.Row) -> SoundAnalysis:
 def _feedback_weight(feedback_type: str) -> int:
     weights = {
         "good": 4,
+        "game_like": 5,
+        "asset_ready": 5,
         "heavy_good": 5,
-        "magic_feel": 5,
+        "sharp_good": 4,
+        "clean_good": 4,
+        "easy_cut": 4,
+        "loop_good": 3,
+        "magic_feel": 4,
         "bad": -5,
+        "noise_bad": -5,
+        "leading_silence_bad": -4,
         "too_sharp": -4,
+        "too_loud": -4,
+        "too_long": -3,
+        "low_quality": -4,
+        "wrong_mood": -3,
+        "license_risky": -4,
     }
     return weights.get(feedback_type, 0)
+
+
+def _related_feedback_adjustment(
+    row: sqlite3.Row,
+    tags: set[str],
+    name_terms: set[str],
+    analysis: SoundAnalysis | None,
+) -> int:
+    feedback_tags = {tag.lower() for tag in json.loads(row["tags"] or "[]")}
+    feedback_name_terms = {
+        term for term in row["name"].lower().replace("_", " ").split() if len(term) > 2
+    }
+    overlap = len(tags & feedback_tags) + len(name_terms & feedback_name_terms)
+    adjustment = 0
+
+    if overlap:
+        adjustment += min(2, overlap) * _related_feedback_weight(row["feedback_type"])
+
+    analysis_adjustment = 0
+    if analysis:
+        analysis_adjustment = _analysis_feedback_adjustment(row, analysis)
+        adjustment += analysis_adjustment
+
+    stored_waveform = json.loads(row["waveform"] or "[]") if row["waveform"] else []
+    has_second_signal = overlap > 0 or analysis_adjustment != 0
+    if (
+        analysis
+        and stored_waveform
+        and has_second_signal
+        and _waveform_profile_similarity(stored_waveform, analysis.waveform) >= 0.88
+    ):
+        adjustment += 2 if _feedback_weight(row["feedback_type"]) > 0 else -1
+
+    return adjustment
+
+
+def _related_feedback_weight(feedback_type: str) -> int:
+    if feedback_type == "bad":
+        return -2
+    return _feedback_weight(feedback_type)
+
+
+def _analysis_feedback_adjustment(row: sqlite3.Row, analysis: SoundAnalysis) -> int:
+    feedback_type = row["feedback_type"]
+    adjustment = 0
+
+    if feedback_type == "heavy_good" and analysis.heaviness_score >= 60:
+        adjustment += 3
+    elif feedback_type == "sharp_good" and 45 <= analysis.sharpness_score <= 82:
+        adjustment += 3
+    elif feedback_type == "too_sharp" and analysis.sharpness_score >= 75:
+        adjustment -= 4
+    elif feedback_type == "too_loud" and (analysis.peak >= 0.98 or analysis.rms >= 0.32):
+        adjustment -= 4
+    elif feedback_type == "too_long" and analysis.duration >= 8:
+        adjustment -= 3
+    elif feedback_type == "low_quality" and (
+        analysis.emptiness_score >= 55 or analysis.peak < 0.12
+    ):
+        adjustment -= 3
+    elif feedback_type == "clean_good" and analysis.emptiness_score <= 18:
+        adjustment += 2
+    elif feedback_type == "noise_bad" and analysis.emptiness_score >= 35:
+        adjustment -= 3
+    elif feedback_type == "leading_silence_bad" and analysis.leading_silence_seconds >= 0.45:
+        adjustment -= 3
+    elif feedback_type == "easy_cut" and _estimate_waveform_events(analysis.waveform) >= 1:
+        adjustment += 3
+    elif feedback_type == "loop_good" and analysis.duration >= 4:
+        adjustment += 2
+    elif feedback_type in {"asset_ready", "game_like"} and _is_asset_ready_analysis(analysis):
+        adjustment += 2
+
+    return adjustment
+
+
+def _exclusive_feedback_types(feedback_type: str) -> tuple[str, ...]:
+    if feedback_type in {"good", "bad"}:
+        return ("good", "bad")
+    return ()
+
+
+def _delete_feedback_sql(type_count: int) -> str:
+    placeholders = ", ".join("?" for _ in range(type_count))
+    return f"""
+        DELETE FROM sound_feedback
+        WHERE source_provider = ? AND source_id = ? AND feedback_type IN ({placeholders})
+    """
+
+
+def _is_asset_ready_analysis(analysis: SoundAnalysis) -> bool:
+    return (
+        analysis.leading_silence_seconds <= 0.25
+        and analysis.emptiness_score <= 25
+        and analysis.duration <= 8
+    )
+
+
+def _estimate_waveform_events(waveform: list[float]) -> int:
+    if not waveform:
+        return 0
+
+    peak = max(waveform)
+    if peak < 0.12:
+        return 0
+
+    threshold = max(0.18, peak * 0.45)
+    quiet_threshold = max(0.08, threshold * 0.4)
+    events = 0
+    in_event = False
+    quiet_run = 0
+
+    for value in waveform:
+        if value >= threshold:
+            if not in_event:
+                events += 1
+                in_event = True
+            quiet_run = 0
+        elif in_event and value <= quiet_threshold:
+            quiet_run += 1
+            if quiet_run >= 2:
+                in_event = False
+                quiet_run = 0
+        elif in_event:
+            quiet_run = 0
+
+    return events
+
+
+def _waveform_profile_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right:
+        return 0
+
+    buckets = 12
+    left_profile = _waveform_profile(left, buckets)
+    right_profile = _waveform_profile(right, buckets)
+    distance = sum(abs(a - b) for a, b in zip(left_profile, right_profile)) / buckets
+    return max(0, 1 - distance)
+
+
+def _waveform_profile(waveform: list[float], buckets: int) -> list[float]:
+    bucket_size = max(1, len(waveform) // buckets)
+    profile: list[float] = []
+    for offset in range(0, len(waveform), bucket_size):
+        chunk = waveform[offset : offset + bucket_size]
+        profile.append(sum(chunk) / max(1, len(chunk)))
+        if len(profile) == buckets:
+            break
+
+    while len(profile) < buckets:
+        profile.append(0)
+
+    return profile
 
 
 def _ensure_analysis_duration_column(connection: sqlite3.Connection) -> None:
@@ -319,3 +608,63 @@ def _ensure_analysis_duration_column(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE sound_analyses ADD COLUMN duration REAL NOT NULL DEFAULT 0"
         )
+
+
+def _ensure_saved_source_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(saved_sounds)").fetchall()
+    }
+    column_defaults = {
+        "source_provider": "TEXT NOT NULL DEFAULT 'freesound'",
+        "source_id": "TEXT NOT NULL DEFAULT ''",
+        "source_url": "TEXT",
+        "license_url": "TEXT",
+        "creator_url": "TEXT",
+        "attribution_text": "TEXT",
+        "download_url": "TEXT",
+        "download_allowed": "INTEGER NOT NULL DEFAULT 1",
+    }
+    for name, definition in column_defaults.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE saved_sounds ADD COLUMN {name} {definition}")
+
+    connection.execute(
+        """
+        UPDATE saved_sounds
+        SET
+            source_provider = COALESCE(NULLIF(source_provider, ''), 'freesound'),
+            source_id = COALESCE(NULLIF(source_id, ''), CAST(freesound_id AS TEXT)),
+            source_url = COALESCE(source_url, url),
+            download_url = COALESCE(download_url, preview_url)
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS saved_sounds_source_identity
+        ON saved_sounds(source_provider, source_id)
+        """
+    )
+
+
+def _ensure_feedback_source_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(sound_feedback)").fetchall()
+    }
+    if "source_provider" not in columns:
+        connection.execute(
+            "ALTER TABLE sound_feedback ADD COLUMN source_provider TEXT NOT NULL DEFAULT 'freesound'"
+        )
+    if "source_id" not in columns:
+        connection.execute(
+            "ALTER TABLE sound_feedback ADD COLUMN source_id TEXT NOT NULL DEFAULT ''"
+        )
+    connection.execute(
+        """
+        UPDATE sound_feedback
+        SET
+            source_provider = COALESCE(NULLIF(source_provider, ''), 'freesound'),
+            source_id = COALESCE(NULLIF(source_id, ''), CAST(freesound_id AS TEXT))
+        """
+    )

@@ -1,31 +1,144 @@
 const form = document.querySelector("#search-form");
 const statusEl = document.querySelector("#status");
+const conditionWarningEl = document.querySelector("#condition-warning");
 const resultsEl = document.querySelector("#results");
 const savedEl = document.querySelector("#saved");
 const refreshSavedButton = document.querySelector("#refresh-saved");
+const savedFilterInput = document.querySelector("#saved-filter");
+const savedSortSelect = document.querySelector("#saved-sort");
+const savedCc0Input = document.querySelector("#saved-cc0");
+const savedGoodInput = document.querySelector("#saved-good");
+const favoriteSearchButton = document.querySelector("#favorite-search");
+const recentSearchesEl = document.querySelector("#recent-searches");
+const favoriteSearchesEl = document.querySelector("#favorite-searches");
 const template = document.querySelector("#sound-card-template");
 
 let lastResults = [];
+let savedSounds = [];
 let audioContext;
 const waveformCache = new Map();
 const feedbackSelections = new Map();
+const cardContexts = new Map();
+const RECENT_SEARCHES_KEY = "soundscrapper.recentSearches";
+const FAVORITE_SEARCHES_KEY = "soundscrapper.favoriteSearches";
 
 const LICENSE_LABELS = {
   "creative commons 0": "CC0",
+  cc0: "CC0",
   attribution: "저작자 표시",
   "attribution noncommercial": "비상업",
+  "cc by": "CC BY",
+  "cc by-sa": "CC BY-SA",
+  "cc by-nd": "CC BY-ND",
+  "cc by-nc": "CC BY-NC",
+};
+
+const SOURCE_LABELS = {
+  freesound: "Freesound",
+  jamendo: "Jamendo",
+  openverse: "Openverse",
+  wikimedia: "Wikimedia",
+  cc_mixter: "ccMixter",
 };
 
 const FEEDBACK_LABELS = {
   good: "좋음",
   bad: "별로",
+  game_like: "게임적임",
+  asset_ready: "에셋활용 가능",
   heavy_good: "묵직함 좋음",
+  sharp_good: "날카로움 좋음",
+  clean_good: "깨끗함",
+  easy_cut: "컷오프 쉬움",
+  loop_good: "루프 좋음",
+  noise_bad: "잡음 많음",
+  leading_silence_bad: "앞 무음 김",
   too_sharp: "너무 날카로움",
-  magic_feel: "마법 느낌 있음",
+  too_loud: "너무 큼",
+  too_long: "너무 김",
+  low_quality: "품질 낮음",
+  wrong_mood: "느낌 안 맞음",
+  license_risky: "라이선스 불안",
+};
+
+const SEARCH_MODE_LABELS = {
+  clean_source: "깨끗한 소스",
+  short_sfx: "짧은 원샷 SFX",
+  easy_cut: "컷오프 쉬움",
+  loop_bgm: "루프/BGM 후보",
+  rights_safe: "저작권 안전 우선",
+};
+
+const SEARCH_MODE_CONFLICTS = {
+  short_sfx: ["loop_bgm"],
+  loop_bgm: ["short_sfx"],
 };
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function readStoredList(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredList(key, values) {
+  localStorage.setItem(key, JSON.stringify(values));
+}
+
+function rememberSearch(prompt) {
+  const normalized = prompt.trim();
+  if (!normalized) {
+    return;
+  }
+  const recent = [normalized, ...readStoredList(RECENT_SEARCHES_KEY).filter((item) => item !== normalized)].slice(0, 8);
+  writeStoredList(RECENT_SEARCHES_KEY, recent);
+  renderSearchMemory();
+}
+
+function toggleFavoriteSearch() {
+  const prompt = document.querySelector("#prompt").value.trim();
+  if (!prompt) {
+    setStatus("즐겨찾기에 넣을 검색어를 먼저 입력하세요.");
+    return;
+  }
+  const favorites = readStoredList(FAVORITE_SEARCHES_KEY);
+  const exists = favorites.includes(prompt);
+  const nextFavorites = exists ? favorites.filter((item) => item !== prompt) : [prompt, ...favorites].slice(0, 12);
+  writeStoredList(FAVORITE_SEARCHES_KEY, nextFavorites);
+  renderSearchMemory();
+  setStatus(exists ? `즐겨찾기 해제: ${prompt}` : `즐겨찾기 저장: ${prompt}`);
+}
+
+function renderSearchMemory() {
+  renderSearchChips(recentSearchesEl, readStoredList(RECENT_SEARCHES_KEY), "최근 검색어 없음");
+  renderSearchChips(favoriteSearchesEl, readStoredList(FAVORITE_SEARCHES_KEY), "즐겨찾기 없음");
+}
+
+function renderSearchChips(container, items, emptyText) {
+  container.replaceChildren();
+  if (items.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "memory-empty";
+    empty.textContent = emptyText;
+    container.append(empty);
+    return;
+  }
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = item;
+    button.addEventListener("click", () => {
+      document.querySelector("#prompt").value = item;
+      setStatus(`검색어 불러옴: ${item}`);
+    });
+    container.append(button);
+  }
 }
 
 function formNumber(id, fallback) {
@@ -37,15 +150,58 @@ function checkboxValue(id) {
   return document.querySelector(id)?.checked ?? false;
 }
 
+function selectedSearchModes() {
+  return Array.from(document.querySelectorAll("[data-search-mode]:checked")).map(
+    (input) => input.dataset.searchMode
+  );
+}
+
 function buildSearchPayload() {
   return {
     prompt: document.querySelector("#prompt").value.trim(),
     license: document.querySelector("#license").value,
+    source_filter: document.querySelector("#source-filter").value,
     min_duration: formNumber("#min-duration", 0.1),
     max_duration: formNumber("#max-duration", 3.0),
     page_size: Math.trunc(formNumber("#page-size", 20)),
     game_ready: checkboxValue("#game-ready"),
+    search_modes: selectedSearchModes(),
   };
+}
+
+function setConditionWarning(message) {
+  conditionWarningEl.textContent = message;
+  conditionWarningEl.classList.toggle("is-visible", Boolean(message));
+}
+
+function setupSearchModeConflicts() {
+  for (const input of document.querySelectorAll("[data-search-mode]")) {
+    input.addEventListener("change", () => {
+      if (!input.checked) {
+        return;
+      }
+
+      const mode = input.dataset.searchMode;
+      const conflicts = SEARCH_MODE_CONFLICTS[mode] || [];
+      const removed = [];
+      for (const conflictMode of conflicts) {
+        const conflictInput = document.querySelector(`[data-search-mode="${conflictMode}"]`);
+        if (conflictInput?.checked) {
+          conflictInput.checked = false;
+          removed.push(SEARCH_MODE_LABELS[conflictMode] || conflictMode);
+        }
+      }
+
+      if (removed.length > 0) {
+        const selectedLabel = SEARCH_MODE_LABELS[mode] || mode;
+        setConditionWarning(
+          `${selectedLabel} 조건은 ${removed.join(", ")} 조건과 같이 쓸 수 없어 기존 선택을 해제했습니다.`
+        );
+      } else {
+        setConditionWarning("");
+      }
+    });
+  }
 }
 
 async function apiFetch(url, options = {}) {
@@ -83,8 +239,34 @@ function licenseLabel(license) {
   return LICENSE_LABELS[key] || license || "라이선스 미상";
 }
 
+function licenseCreditNote(license) {
+  const key = (license || "").toLowerCase();
+  if (key.includes("creative commons 0") || key.includes("publicdomain/zero")) {
+    return "CC0 · 출처 표기 선택";
+  }
+  if (key.includes("attribution") && !key.includes("noncommercial")) {
+    return "저작자 표시 필요 · 원본 페이지에서 크레딧 확인";
+  }
+  if (key.includes("noncommercial")) {
+    return "비상업 라이선스 · 게임 배포 전 사용 불가 가능성 확인";
+  }
+  return "라이선스 원본 확인 필요";
+}
+
+function sourceLabel(provider) {
+  return SOURCE_LABELS[(provider || "").toLowerCase()] || provider || "Unknown";
+}
+
 function previewAudioUrl(sound) {
   return `/api/preview-audio/${sound.id}?preview_url=${encodeURIComponent(sound.preview_url)}`;
+}
+
+function downloadPreviewUrl(sound) {
+  const params = new URLSearchParams({
+    preview_url: sound.download_url || sound.preview_url || "",
+    name: sound.name || "sound",
+  });
+  return `/api/download-preview/${sound.id}?${params.toString()}`;
 }
 
 function renderTags(container, tags) {
@@ -105,8 +287,93 @@ function renderScoreReasons(container, reasons) {
   }
 }
 
+function renderFitBadges(container, sound, analysis = null) {
+  const badges = conditionBadges(sound, analysis).slice(0, 6);
+  container.replaceChildren();
+  for (const badge of badges) {
+    const item = document.createElement("span");
+    item.className = `fit-badge fit-badge-${badge.tone}`;
+    item.textContent = badge.label;
+    container.append(item);
+  }
+}
+
+function conditionBadges(sound, analysis = null) {
+  const badges = [];
+  const reasons = sound.score_reasons || [];
+  const text = [sound.name, sound.description || "", ...(sound.tags || [])].join(" ").toLowerCase();
+  const hasReason = (pattern) => reasons.some((reason) => reason.includes(pattern));
+
+  if (hasReason("깨끗한 소스") || text.includes("clean") || text.includes("isolated")) {
+    badges.push({ label: "깨끗함", tone: "good" });
+  }
+  if (hasReason("짧은 원샷") || (sound.duration > 0 && sound.duration <= 3)) {
+    badges.push({ label: "짧은 SFX", tone: "good" });
+  }
+  if (hasReason("컷오프") || hasReason("파형 이벤트") || hasReason("파형 분리")) {
+    badges.push({ label: "컷오프 쉬움", tone: "good" });
+  }
+  if (hasReason("BGM/루프") || text.includes("loop") || text.includes("bgm")) {
+    badges.push({ label: "루프 후보", tone: "neutral" });
+  }
+  if (hasReason("저작권 안전") || licenseLabel(sound.license) === "CC0") {
+    badges.push({ label: "권리 안전", tone: "good" });
+  }
+  if (hasReason("환경음/잡음") || text.includes("noise") || text.includes("field-recording")) {
+    badges.push({ label: "잡음 주의", tone: "warn" });
+  }
+  if (analysis) {
+    if (isLoudAnalysis(analysis)) {
+      badges.push({ label: "음량 큼", tone: "danger" });
+    }
+    if (analysis.leading_silence_seconds <= 0.2) {
+      badges.push({ label: "앞 무음 적음", tone: "good" });
+    } else if (analysis.leading_silence_seconds >= 0.6) {
+      badges.push({ label: "앞 무음 김", tone: "warn" });
+    }
+    if (analysis.emptiness_score >= 45) {
+      badges.push({ label: "빈 구간 많음", tone: "warn" });
+    }
+  }
+
+  return dedupeBadges(badges);
+}
+
+function isLoudAnalysis(analysis) {
+  return Boolean(analysis && (analysis.peak >= 0.98 || analysis.rms >= 0.32));
+}
+
+function renderLoudWarning(node, analysis = null) {
+  const warning = node.querySelector(".loud-warning");
+  if (!warning) {
+    return;
+  }
+  if (!isLoudAnalysis(analysis)) {
+    warning.hidden = true;
+    return;
+  }
+  warning.hidden = false;
+  warning.textContent = `청취 주의: 음량이 큼 · Peak ${analysis.peak.toFixed(2)} · RMS ${analysis.rms.toFixed(2)}`;
+}
+
+function dedupeBadges(badges) {
+  const seen = new Set();
+  return badges.filter((badge) => {
+    if (seen.has(badge.label)) {
+      return false;
+    }
+    seen.add(badge.label);
+    return true;
+  });
+}
+
 function renderSoundCard(sound) {
   const node = template.content.firstElementChild.cloneNode(true);
+  node.dataset.soundId = String(sound.id);
+  node.dataset.sourceProvider = sound.source_provider || "";
+  const sourceBadge = node.querySelector(".source-badge");
+  sourceBadge.textContent = sourceLabel(sound.source_provider);
+  sourceBadge.classList.add(`source-${sound.source_provider || "unknown"}`);
   node.querySelector("h3").textContent = sound.name;
   node.querySelector(".meta").textContent =
     `${sound.duration.toFixed(2)}초 · ${licenseLabel(sound.license)} · ${sound.username || "제작자 미상"}`;
@@ -117,6 +384,10 @@ function renderSoundCard(sound) {
         ? ` ${sound.personal_score_adjustment}`
         : "";
   node.querySelector(".score").textContent = `점수 ${sound.score}${adjustment}`;
+  node.querySelector(".license-note").textContent = licenseCreditNote(sound.license);
+  renderAttributionNote(node.querySelector(".attribution-note"), sound);
+  renderLoudWarning(node);
+  renderFitBadges(node.querySelector(".fit-badges"), sound);
   renderScoreReasons(node.querySelector(".score-reasons"), sound.score_reasons || []);
 
   const audio = node.querySelector("audio");
@@ -138,6 +409,7 @@ function renderSoundCard(sound) {
   } else {
     disableLoopControls(loopControls);
   }
+  cardContexts.set(sound.id, { sound, node, audio, loopState, loopControls });
 
   node.querySelector(".description").textContent = sound.description || "";
   renderTags(node.querySelector(".tags"), sound.tags || []);
@@ -159,55 +431,127 @@ function renderSoundCard(sound) {
     }
   });
 
+  const downloadButton = node.querySelector("[data-action='download']");
+  if (!sound.download_allowed || !(sound.download_url || sound.preview_url)) {
+    downloadButton.disabled = true;
+    downloadButton.textContent = "다운로드 없음";
+  } else {
+    downloadButton.addEventListener("click", () => {
+      triggerDownload(sound);
+    });
+  }
+
   const waveformButton = node.querySelector("[data-action='waveform']");
-  const waveformPanel = node.querySelector(".waveform-panel");
-  const canvas = node.querySelector(".waveform-canvas");
-  const metrics = node.querySelector(".analysis-metrics");
 
   if (!sound.preview_url) {
     waveformButton.disabled = true;
     waveformButton.textContent = "파형 없음";
   } else {
     waveformButton.addEventListener("click", async () => {
-      try {
-        waveformButton.disabled = true;
-        waveformButton.textContent = "분석 중...";
-        const analysis = await analyzeSound(sound, audio);
-        waveformPanel.hidden = false;
-        renderMetrics(metrics, analysis);
-        appendAnalysisReasons(node.querySelector(".score-reasons"), analysis);
-        drawWaveform(canvas, analysis, 0, loopState);
-        bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
-        await saveAnalysis(analysis);
-        waveformButton.textContent = "파형 갱신";
-        setStatus(`파형 분석 완료: ${sound.name}`);
-      } catch (error) {
-        setStatus(`파형 분석 실패: ${translateError(error.message)}`);
-        waveformButton.textContent = "파형 보기";
-      } finally {
-        waveformButton.disabled = false;
-      }
+      await analyzeSoundCard(sound, node, audio, loopState, loopControls);
     });
   }
 
   for (const button of node.querySelectorAll("[data-feedback]")) {
     button.addEventListener("click", async () => {
       const feedbackType = button.dataset.feedback;
+      const nextActive = button.getAttribute("aria-pressed") !== "true";
       try {
-        await sendFeedback(sound, feedbackType);
-        markFeedbackSelected(sound.id, feedbackType, node);
-        setStatus(`평가 저장됨: ${FEEDBACK_LABELS[feedbackType]} · ${sound.name}`);
+        await sendFeedback(sound, feedbackType, nextActive);
+        markFeedbackSelected(sound.id, feedbackType, node, nextActive);
+        const action = nextActive ? "저장됨" : "해제됨";
+        const suffix = feedbackType === "bad" && nextActive ? " · 이유를 선택해 주세요" : "";
+        setStatus(`평가 ${action}: ${FEEDBACK_LABELS[feedbackType]} · ${sound.name}${suffix}`);
       } catch (error) {
         setStatus(`평가 저장 실패: ${translateError(error.message)}`);
       }
     });
   }
 
+  syncBadReasonVisibility(node);
+  hydrateStoredAnalysis(sound, node);
+
   return node;
+}
+
+function renderAttributionNote(container, sound) {
+  container.replaceChildren();
+  const text = sound.attribution_text || `${sound.name} by ${sound.username || "Unknown creator"}`;
+  container.append(document.createTextNode(text));
+  const links = [
+    ["원본", sound.source_url || sound.url],
+    ["라이선스", sound.license_url],
+    ["저작자", sound.creator_url],
+  ].filter(([, href]) => href);
+
+  for (const [label, href] of links) {
+    const link = document.createElement("a");
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = label;
+    container.append(document.createTextNode(" · "));
+    container.append(link);
+  }
+}
+
+function triggerDownload(sound) {
+  const link = document.createElement("a");
+  link.href = downloadPreviewUrl(sound);
+  link.download = "";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setStatus(`다운로드 시작: ${sound.name} · 라이선스 확인은 원본 페이지 기준입니다.`);
+}
+
+async function hydrateStoredAnalysis(sound, node) {
+  try {
+    const analysis = await apiFetch(`/api/sound-analyses/${sound.id}`);
+    if (!analysis) {
+      return;
+    }
+    waveformCache.set(sound.id, analysis);
+    renderLoudWarning(node, analysis);
+    renderFitBadges(node.querySelector(".fit-badges"), sound, analysis);
+  } catch {
+    // 저장된 분석값은 보조 정보라 실패해도 검색 흐름은 유지한다.
+  }
+}
+
+async function analyzeSoundCard(sound, node, audio, loopState, loopControls, options = {}) {
+  const waveformButton = node.querySelector("[data-action='waveform']");
+  const waveformPanel = node.querySelector(".waveform-panel");
+  const canvas = node.querySelector(".waveform-canvas");
+  const metrics = node.querySelector(".analysis-metrics");
+
+  try {
+    waveformButton.disabled = true;
+    waveformButton.textContent = options.auto ? "자동 분석 중..." : "분석 중...";
+    const analysis = await analyzeSound(sound, audio);
+    waveformPanel.hidden = false;
+    renderMetrics(metrics, analysis);
+    renderLoudWarning(node, analysis);
+    renderFitBadges(node.querySelector(".fit-badges"), sound, analysis);
+    appendAnalysisReasons(node.querySelector(".score-reasons"), analysis);
+    drawWaveform(canvas, analysis, 0, loopState);
+    bindWaveformSeek(canvas, audio, sound, analysis, loopState, loopControls);
+    await saveAnalysis(analysis);
+    waveformButton.textContent = "파형 갱신";
+    setStatus(`${options.auto ? "자동 " : ""}파형 분석 완료: ${sound.name}`);
+  } catch (error) {
+    setStatus(`파형 분석 실패: ${translateError(error.message)}`);
+    waveformButton.textContent = "파형 보기";
+  } finally {
+    waveformButton.disabled = false;
+  }
 }
 
 function appendAnalysisReasons(container, analysis) {
   const reasons = [];
+  if (isLoudAnalysis(analysis)) {
+    reasons.push("청취 주의: 음량 큼");
+  }
   if (analysis.leading_silence_seconds >= 0.35) {
     reasons.push(`앞 무음 ${analysis.leading_silence_seconds.toFixed(2)}초`);
   }
@@ -229,13 +573,44 @@ function appendAnalysisReasons(container, analysis) {
   }
 }
 
-function markFeedbackSelected(soundId, feedbackType, node) {
-  feedbackSelections.set(soundId, feedbackType);
-  for (const button of node.querySelectorAll("[data-feedback]")) {
-    const selected = button.dataset.feedback === feedbackType;
-    button.classList.toggle("is-selected", selected);
-    button.setAttribute("aria-pressed", String(selected));
+function markFeedbackSelected(soundId, feedbackType, node, active) {
+  const selectedTypes = feedbackSelections.get(soundId) || new Set();
+  const button = node.querySelector(`[data-feedback="${feedbackType}"]`);
+
+  if (button?.dataset.feedbackGroup === "preference" && active) {
+    for (const peer of node.querySelectorAll('[data-feedback-group="preference"]')) {
+      selectedTypes.delete(peer.dataset.feedback);
+      setFeedbackButtonPressed(peer, false);
+    }
   }
+
+  if (active) {
+    selectedTypes.add(feedbackType);
+  } else {
+    selectedTypes.delete(feedbackType);
+  }
+
+  if (button) {
+    setFeedbackButtonPressed(button, active);
+  }
+  feedbackSelections.set(soundId, selectedTypes);
+  syncBadReasonVisibility(node);
+}
+
+function setFeedbackButtonPressed(button, selected) {
+  button.classList.toggle("is-selected", selected);
+  button.setAttribute("aria-pressed", String(selected));
+}
+
+function syncBadReasonVisibility(node) {
+  const badButton = node.querySelector('[data-feedback="bad"]');
+  const badReasons = node.querySelector(".bad-reasons");
+  const badSelected = badButton?.getAttribute("aria-pressed") === "true";
+  if (!badReasons) {
+    return;
+  }
+  badReasons.hidden = !badSelected;
+  badReasons.classList.toggle("is-highlighted", badSelected);
 }
 
 function loopControlElements(node) {
@@ -382,6 +757,7 @@ function formatTime(value) {
 
 function renderResults(results) {
   resultsEl.replaceChildren();
+  cardContexts.clear();
   if (results.length === 0) {
     resultsEl.append(emptyState("검색 결과가 없습니다."));
     return;
@@ -391,7 +767,76 @@ function renderResults(results) {
   }
 }
 
-function renderSaved(sounds) {
+async function autoAnalyzeTopResults() {
+  if (!checkboxValue("#auto-analyze")) {
+    return;
+  }
+
+  const targets = lastResults.filter((sound) => sound.preview_url).slice(0, 5);
+  if (targets.length === 0) {
+    return;
+  }
+
+  setStatus(`상위 ${targets.length}개 파형 자동 분석을 시작합니다.`);
+  for (const sound of targets) {
+    const context = cardContexts.get(sound.id);
+    if (!context) {
+      continue;
+    }
+    await analyzeSoundCard(
+      context.sound,
+      context.node,
+      context.audio,
+      context.loopState,
+      context.loopControls,
+      { auto: true }
+    );
+  }
+  setStatus(`상위 ${targets.length}개 파형 자동 분석 완료`);
+}
+
+function filteredSavedSounds() {
+  const filterText = (savedFilterInput.value || "").trim().toLowerCase();
+  const cc0Only = savedCc0Input.checked;
+  const goodOnly = savedGoodInput.checked;
+
+  return savedSounds
+    .filter((sound) => {
+      const searchable = [
+        sound.name,
+        sound.username,
+        licenseLabel(sound.license),
+        sourceLabel(sound.source_provider),
+        ...(sound.tags || []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (filterText && !searchable.includes(filterText)) {
+        return false;
+      }
+      if (cc0Only && licenseLabel(sound.license) !== "CC0") {
+        return false;
+      }
+      if (goodOnly && !(sound.feedback_types || []).includes("good")) {
+        return false;
+      }
+      return true;
+    })
+    .sort(savedSorter(savedSortSelect.value));
+}
+
+function savedSorter(sortKey) {
+  const byRecent = (left, right) => String(right.saved_at).localeCompare(String(left.saved_at));
+  const sorters = {
+    recent: byRecent,
+    score: (left, right) => right.score - left.score || byRecent(left, right),
+    duration_asc: (left, right) => left.duration - right.duration || byRecent(left, right),
+    duration_desc: (left, right) => right.duration - left.duration || byRecent(left, right),
+  };
+  return sorters[sortKey] || byRecent;
+}
+
+function renderSaved(sounds = filteredSavedSounds()) {
   savedEl.replaceChildren();
   if (sounds.length === 0) {
     savedEl.append(emptyState("저장한 후보가 없습니다."));
@@ -406,11 +851,31 @@ function renderSaved(sounds) {
     title.textContent = sound.name;
 
     const meta = document.createElement("span");
-    meta.textContent = `${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
+    meta.textContent =
+      `${sourceLabel(sound.source_provider)} · ${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
 
     item.append(title, meta);
+    const feedback = renderSavedFeedback(sound.feedback_types || []);
+    if (feedback) {
+      item.append(feedback);
+    }
     savedEl.append(item);
   }
+}
+
+function renderSavedFeedback(feedbackTypes) {
+  const labels = feedbackTypes.map((type) => FEEDBACK_LABELS[type]).filter(Boolean).slice(0, 4);
+  if (labels.length === 0) {
+    return null;
+  }
+  const container = document.createElement("div");
+  container.className = "saved-feedback";
+  for (const label of labels) {
+    const pill = document.createElement("span");
+    pill.textContent = label;
+    container.append(pill);
+  }
+  return container;
 }
 
 function emptyState(text) {
@@ -438,7 +903,13 @@ async function searchSounds(event) {
     });
     lastResults = data.results;
     renderResults(lastResults);
-    setStatus(`검색식: ${data.query} · 후보 ${lastResults.length}개`);
+    rememberSearch(payload.prompt);
+    const warningText =
+      data.source_warnings && data.source_warnings.length
+        ? ` · ${data.source_warnings.join(" · ")}`
+        : "";
+    setStatus(`검색식: ${data.query} · 후보 ${lastResults.length}개${warningText}`);
+    await autoAnalyzeTopResults();
   } catch (error) {
     setStatus(`검색 실패: ${translateError(error.message)}`);
     renderResults([]);
@@ -459,15 +930,18 @@ async function saveAnalysis(analysis) {
   });
 }
 
-async function sendFeedback(sound, feedbackType) {
+async function sendFeedback(sound, feedbackType, active) {
   return apiFetch("/api/feedback", {
     method: "POST",
     body: JSON.stringify({
       id: sound.id,
       prompt: document.querySelector("#prompt").value.trim(),
       feedback_type: feedbackType,
+      active,
       name: sound.name,
       tags: sound.tags || [],
+      source_provider: sound.source_provider || "freesound",
+      source_id: sound.source_id || String(sound.id),
     }),
   });
 }
@@ -625,6 +1099,7 @@ function renderMetrics(container, analysis) {
   container.replaceChildren(
     metric("앞 무음", `${analysis.leading_silence_seconds.toFixed(2)}초`),
     metric("RMS", analysis.rms.toFixed(3)),
+    metric("Peak", analysis.peak.toFixed(3)),
     metric("저역", `${Math.round(analysis.low_ratio * 100)}%`),
     metric("고역", `${Math.round(analysis.high_ratio * 100)}%`),
     metric("묵직함", analysis.heaviness_score),
@@ -735,8 +1210,8 @@ function roundMetric(value) {
 
 async function loadSavedSounds() {
   try {
-    const sounds = await apiFetch("/api/saved-sounds");
-    renderSaved(sounds);
+    savedSounds = await apiFetch("/api/saved-sounds");
+    renderSaved();
   } catch (error) {
     setStatus(`저장 목록을 불러오지 못했습니다: ${translateError(error.message)}`);
   }
@@ -744,4 +1219,11 @@ async function loadSavedSounds() {
 
 form.addEventListener("submit", searchSounds);
 refreshSavedButton.addEventListener("click", loadSavedSounds);
+savedFilterInput.addEventListener("input", () => renderSaved());
+savedSortSelect.addEventListener("change", () => renderSaved());
+savedCc0Input.addEventListener("change", () => renderSaved());
+savedGoodInput.addEventListener("change", () => renderSaved());
+favoriteSearchButton.addEventListener("click", toggleFavoriteSearch);
+setupSearchModeConflicts();
+renderSearchMemory();
 loadSavedSounds();
