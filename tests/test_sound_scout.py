@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import sqlite3
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -9,10 +11,14 @@ from fastapi.testclient import TestClient
 
 from backend.app.config import Settings, _normalize_openverse_base_url
 from backend.app.db import (
+    create_saved_folder,
+    delete_saved_folder,
     delete_saved_sound,
     feedback_adjustment,
     get_analysis,
+    list_saved_folders,
     list_saved_sounds,
+    rename_saved_folder,
     save_analysis,
     save_feedback,
     save_sound,
@@ -285,6 +291,34 @@ def test_saved_sound_metadata_can_be_updated_and_preserved(tmp_path: Path) -> No
     assert listed[0].download_filename == "전투_1"
 
 
+def test_saved_folders_rename_and_delete_move_sounds_safely(tmp_path: Path) -> None:
+    database_path = tmp_path / "saved-folders.db"
+    folder = create_saved_folder(database_path, "UI")
+    saved = save_sound(database_path, SoundSearchResult(id=121, name="Click"))
+    updated = update_saved_sound(
+        database_path,
+        saved.saved_id,
+        SavedSoundUpdate(folder="UI"),
+    )
+
+    assert updated is not None
+    assert updated.folder == "UI"
+    assert list_saved_folders(database_path)[0].name == "UI"
+
+    renamed = rename_saved_folder(database_path, folder.folder_id, "Menus")
+    listed = list_saved_sounds(database_path)
+
+    assert renamed is not None
+    assert renamed.name == "Menus"
+    assert listed[0].folder == "Menus"
+
+    assert delete_saved_folder(database_path, renamed.folder_id) is True
+    listed_after_delete = list_saved_sounds(database_path)
+
+    assert listed_after_delete[0].name == "Click"
+    assert listed_after_delete[0].folder == ""
+
+
 def test_delete_saved_sound_removes_only_saved_candidate(tmp_path: Path) -> None:
     database_path = tmp_path / "delete-saved.db"
     first = save_sound(database_path, SoundSearchResult(id=13, name="Keep"))
@@ -479,6 +513,63 @@ def test_download_preview_returns_attachment(tmp_path: Path, monkeypatch) -> Non
     assert response.headers["content-type"] == "audio/mpeg"
     assert "attachment" in response.headers["content-disposition"]
     assert "Big%20Boom.mp3" in response.headers["content-disposition"]
+
+
+def test_saved_folder_download_returns_zip_with_ordered_names(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "folder-download.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    folder = client.post("/api/saved-folders", json={"name": "UI"}).json()
+    first = client.post(
+        "/api/saved-sounds",
+        json={
+            "id": 51,
+            "name": "Click",
+            "preview_url": "https://cdn.freesound.org/previews/51.mp3",
+            "download_url": "https://cdn.freesound.org/previews/51.mp3",
+            "download_allowed": True,
+        },
+    ).json()
+    second = client.post(
+        "/api/saved-sounds",
+        json={
+            "id": 52,
+            "name": "Confirm",
+            "preview_url": "https://cdn.freesound.org/previews/52.mp3",
+            "download_url": "https://cdn.freesound.org/previews/52.mp3",
+            "download_allowed": True,
+        },
+    ).json()
+    client.patch(f"/api/saved-sounds/{first['saved_id']}", json={"folder": "UI"})
+    client.patch(f"/api/saved-sounds/{second['saved_id']}", json={"folder": "UI"})
+
+    async def fake_cache_preview_audio(cache_dir: Path, sound_id: int, preview_url: str) -> Path:
+        path = cache_dir / f"{sound_id}.mp3"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"audio-{sound_id}".encode())
+        return path
+
+    monkeypatch.setattr("backend.app.main.cache_preview_audio", fake_cache_preview_audio)
+
+    response = client.get(f"/api/saved-folders/{folder['folder_id']}/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "attachment" in response.headers["content-disposition"]
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert archive.namelist() == ["UI_1.mp3", "UI_2.mp3"]
+    assert archive.read("UI_1.mp3") == b"audio-52"
+    assert archive.read("UI_2.mp3") == b"audio-51"
 
 
 def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:

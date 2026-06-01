@@ -146,6 +146,22 @@ class SavedSoundUpdate(BaseModel):
     download_filename: str | None = Field(None, max_length=120)
 
 
+class SavedFolder(BaseModel):
+    folder_id: int
+    name: str
+    sort_order: int = 0
+    sound_count: int = 0
+    created_at: str | None = None
+
+
+class SavedFolderCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class SavedFolderUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
 class FeedbackRequest(BaseModel):
     id: int
     prompt: str = ""

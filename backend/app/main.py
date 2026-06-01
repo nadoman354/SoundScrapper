@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
+import zipfile
 from urllib.parse import quote
 
 import httpx
@@ -9,14 +11,19 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from backend.app.config import Settings, get_settings
 from backend.app.db import (
+    create_saved_folder,
+    delete_saved_folder,
     delete_saved_sound,
     feedback_adjustment,
     get_analysis,
     initialize_db,
+    list_saved_folders,
     list_saved_sounds,
+    rename_saved_folder,
     save_analysis,
     save_feedback,
     save_sound,
@@ -35,6 +42,9 @@ from backend.app.schemas import (
     PreviewCacheResponse,
     ProviderStatus,
     ProviderStatusResponse,
+    SavedFolder,
+    SavedFolderCreate,
+    SavedFolderUpdate,
     SavedSound,
     SavedSoundUpdate,
     SearchRequest,
@@ -213,6 +223,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         deleted = delete_saved_sound(request_settings.database_path, saved_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Saved sound was not found.")
+
+    @app.get("/api/saved-folders", response_model=list[SavedFolder])
+    def get_saved_folders(fastapi_request: Request) -> list[SavedFolder]:
+        request_settings: Settings = fastapi_request.app.state.settings
+        return list_saved_folders(request_settings.database_path)
+
+    @app.post("/api/saved-folders", response_model=SavedFolder)
+    def post_saved_folder(
+        folder: SavedFolderCreate,
+        fastapi_request: Request,
+    ) -> SavedFolder:
+        request_settings: Settings = fastapi_request.app.state.settings
+        try:
+            return create_saved_folder(request_settings.database_path, folder.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/api/saved-folders/{folder_id}", response_model=SavedFolder)
+    def patch_saved_folder(
+        folder_id: int,
+        folder: SavedFolderUpdate,
+        fastapi_request: Request,
+    ) -> SavedFolder:
+        request_settings: Settings = fastapi_request.app.state.settings
+        try:
+            updated = rename_saved_folder(
+                request_settings.database_path,
+                folder_id,
+                folder.name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Saved folder was not found.")
+        return updated
+
+    @app.delete("/api/saved-folders/{folder_id}", status_code=204)
+    def remove_saved_folder(folder_id: int, fastapi_request: Request) -> None:
+        request_settings: Settings = fastapi_request.app.state.settings
+        deleted = delete_saved_folder(request_settings.database_path, folder_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Saved folder was not found.")
+
+    @app.get("/api/saved-folders/{folder_id}/download")
+    async def download_saved_folder(
+        folder_id: int,
+        fastapi_request: Request,
+        saved_ids: str | None = None,
+    ) -> FileResponse:
+        request_settings: Settings = fastapi_request.app.state.settings
+        folder_name = _folder_name_for_download(
+            request_settings.database_path,
+            folder_id,
+        )
+        if folder_name is None:
+            raise HTTPException(status_code=404, detail="Saved folder was not found.")
+
+        archive_path = await _build_saved_folder_archive(
+            request_settings,
+            folder_id,
+            folder_name,
+            saved_ids,
+        )
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename=_safe_download_filename(folder_name or "미분류", folder_id, ".zip"),
+            background=BackgroundTask(archive_path.unlink, missing_ok=True),
+        )
 
     @app.get("/api/preview-audio/{sound_id}")
     async def get_preview_audio(sound_id: int, preview_url: str, fastapi_request: Request) -> FileResponse:
@@ -418,6 +497,104 @@ def _dedupe_results(results: list[SoundSearchResult]) -> list[SoundSearchResult]
             best[key] = (priority, order, result)
 
     return [item[2] for item in sorted(best.values(), key=lambda value: value[1])]
+
+
+def _folder_name_for_download(database_path, folder_id: int) -> str | None:
+    if folder_id == 0:
+        return ""
+    for folder in list_saved_folders(database_path):
+        if folder.folder_id == folder_id:
+            return folder.name
+    return None
+
+
+async def _build_saved_folder_archive(
+    settings: Settings,
+    folder_id: int,
+    folder_name: str,
+    saved_ids: str | None = None,
+):
+    folder_label = folder_name or "미분류"
+    saved_sounds = [
+        sound
+        for sound in list_saved_sounds(settings.database_path)
+        if (sound.folder or "").strip() == folder_name
+    ]
+    saved_sounds = _apply_saved_id_order(saved_sounds, saved_ids)
+    archive_dir = settings.preview_cache_dir / "folder-downloads"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = archive_dir / f"saved-folder-{folder_id}-{time.time_ns()}.zip"
+
+    used_names: set[str] = set()
+    added = 0
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, sound in enumerate(saved_sounds):
+            preview_url = sound.download_url or sound.preview_url
+            if not sound.download_allowed or not preview_url:
+                continue
+            try:
+                path = await cache_preview_audio(
+                    settings.preview_cache_dir,
+                    sound.id,
+                    preview_url,
+                )
+            except PreviewCacheError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail=f"Preview download failed: {exc}") from exc
+
+            default_name = f"{folder_label}_{index + 1}"
+            base_name = (sound.download_filename or "").strip() or default_name
+            archive_name = _dedupe_archive_filename(
+                _safe_download_filename(base_name, sound.id, path.suffix),
+                used_names,
+            )
+            archive.write(path, archive_name)
+            added += 1
+
+    if added == 0:
+        archive_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=404, detail="No downloadable saved sounds in folder.")
+
+    return archive_path
+
+
+def _apply_saved_id_order(saved_sounds: list[SavedSound], saved_ids: str | None) -> list[SavedSound]:
+    if not saved_ids:
+        return saved_sounds
+    ordered_ids = []
+    for raw_id in saved_ids.split(","):
+        try:
+            ordered_ids.append(int(raw_id.strip()))
+        except ValueError:
+            continue
+    if not ordered_ids:
+        return saved_sounds
+    order = {saved_id: index for index, saved_id in enumerate(ordered_ids)}
+    return sorted(
+        saved_sounds,
+        key=lambda sound: (order.get(sound.saved_id, len(order)), sound.saved_id),
+    )
+
+
+def _dedupe_archive_filename(filename: str, used_names: set[str]) -> str:
+    if filename not in used_names:
+        used_names.add(filename)
+        return filename
+
+    stem, dot, suffix = filename.rpartition(".")
+    if not dot:
+        stem = filename
+        suffix = ""
+    for index in range(2, 1000):
+        candidate = f"{stem}_{index}.{suffix}" if suffix else f"{stem}_{index}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+
+    candidate = f"{stem}_{time.time_ns()}.{suffix}" if suffix else f"{stem}_{time.time_ns()}"
+    used_names.add(candidate)
+    return candidate
 
 
 def _safe_download_filename(name: str, sound_id: int, suffix: str) -> str:

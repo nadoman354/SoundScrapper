@@ -7,6 +7,7 @@ from pathlib import Path
 from backend.app.schemas import (
     FeedbackRequest,
     FeedbackResponse,
+    SavedFolder,
     SavedSound,
     SavedSoundUpdate,
     SoundAnalysis,
@@ -41,6 +42,13 @@ CREATE TABLE IF NOT EXISTS saved_sounds (
     labels TEXT NOT NULL DEFAULT '[]',
     download_filename TEXT NOT NULL DEFAULT '',
     saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS saved_folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS sound_analyses (
@@ -82,6 +90,8 @@ def initialize_db(database_path: Path) -> None:
         _ensure_analysis_duration_column(connection)
         _ensure_saved_source_columns(connection)
         _ensure_saved_metadata_columns(connection)
+        _ensure_saved_folder_table(connection)
+        _sync_existing_saved_folders(connection)
         _ensure_feedback_source_columns(connection)
         connection.commit()
 
@@ -194,6 +204,7 @@ def update_saved_sound(
     fields_set = _model_fields_set(update)
     assignments: list[str] = []
     values: list[object] = []
+    folder_name: str | None = None
 
     if "note" in fields_set:
         assignments.append("note = ?")
@@ -202,8 +213,9 @@ def update_saved_sound(
         assignments.append("fit_rating = ?")
         values.append(update.fit_rating)
     if "folder" in fields_set:
+        folder_name = _normalize_folder_name(update.folder or "")
         assignments.append("folder = ?")
-        values.append((update.folder or "").strip())
+        values.append(folder_name)
     if "labels" in fields_set:
         assignments.append("labels = ?")
         values.append(json.dumps(_clean_labels(update.labels or []), ensure_ascii=False))
@@ -214,6 +226,8 @@ def update_saved_sound(
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         if assignments:
+            if "folder" in fields_set and folder_name:
+                _ensure_folder_named(connection, folder_name)
             values.append(saved_id)
             connection.execute(
                 f"UPDATE saved_sounds SET {', '.join(assignments)} WHERE id = ?",
@@ -244,6 +258,109 @@ def delete_saved_sound(database_path: Path, saved_id: int) -> bool:
     initialize_db(database_path)
     with sqlite3.connect(database_path) as connection:
         cursor = connection.execute("DELETE FROM saved_sounds WHERE id = ?", (saved_id,))
+        connection.commit()
+        return cursor.rowcount > 0
+
+
+def list_saved_folders(database_path: Path) -> list[SavedFolder]:
+    initialize_db(database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT
+                saved_folders.*,
+                COALESCE(folder_counts.sound_count, 0) AS sound_count
+            FROM saved_folders
+            LEFT JOIN (
+                SELECT folder, COUNT(*) AS sound_count
+                FROM saved_sounds
+                WHERE folder <> ''
+                GROUP BY folder
+            ) AS folder_counts
+                ON folder_counts.folder = saved_folders.name
+            ORDER BY saved_folders.sort_order ASC, LOWER(saved_folders.name) ASC
+            """
+        ).fetchall()
+
+    return [_row_to_saved_folder(row) for row in rows]
+
+
+def create_saved_folder(database_path: Path, name: str) -> SavedFolder:
+    initialize_db(database_path)
+    folder_name = _normalize_folder_name(name)
+    if not folder_name:
+        raise ValueError("Folder name is required.")
+
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        existing = _folder_row_by_name(connection, folder_name)
+        if existing:
+            return _row_to_saved_folder(existing)
+
+        sort_order = connection.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_folders"
+        ).fetchone()[0]
+        cursor = connection.execute(
+            "INSERT INTO saved_folders (name, sort_order) VALUES (?, ?)",
+            (folder_name, sort_order),
+        )
+        connection.commit()
+        row = _folder_row_by_id(connection, cursor.lastrowid)
+
+    return _row_to_saved_folder(row)
+
+
+def rename_saved_folder(database_path: Path, folder_id: int, name: str) -> SavedFolder | None:
+    initialize_db(database_path)
+    folder_name = _normalize_folder_name(name)
+    if not folder_name:
+        raise ValueError("Folder name is required.")
+
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        current = _folder_row_by_id(connection, folder_id)
+        if not current:
+            return None
+
+        old_name = current["name"]
+        existing = _folder_row_by_name(connection, folder_name)
+        if existing and existing["id"] != folder_id:
+            connection.execute(
+                "UPDATE saved_sounds SET folder = ? WHERE folder = ?",
+                (folder_name, old_name),
+            )
+            connection.execute("DELETE FROM saved_folders WHERE id = ?", (folder_id,))
+            connection.commit()
+            row = _folder_row_by_id(connection, existing["id"])
+            return _row_to_saved_folder(row)
+
+        connection.execute(
+            "UPDATE saved_folders SET name = ? WHERE id = ?",
+            (folder_name, folder_id),
+        )
+        connection.execute(
+            "UPDATE saved_sounds SET folder = ? WHERE folder = ?",
+            (folder_name, old_name),
+        )
+        connection.commit()
+        row = _folder_row_by_id(connection, folder_id)
+
+    return _row_to_saved_folder(row)
+
+
+def delete_saved_folder(database_path: Path, folder_id: int) -> bool:
+    initialize_db(database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        current = _folder_row_by_id(connection, folder_id)
+        if not current:
+            return False
+        connection.execute(
+            "UPDATE saved_sounds SET folder = '' WHERE folder = ?",
+            (current["name"],),
+        )
+        cursor = connection.execute("DELETE FROM saved_folders WHERE id = ?", (folder_id,))
         connection.commit()
         return cursor.rowcount > 0
 
@@ -476,6 +593,16 @@ def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
         folder=row["folder"] if "folder" in row.keys() else "",
         labels=labels,
         download_filename=row["download_filename"] if "download_filename" in row.keys() else "",
+    )
+
+
+def _row_to_saved_folder(row: sqlite3.Row) -> SavedFolder:
+    return SavedFolder(
+        folder_id=row["id"],
+        name=row["name"],
+        sort_order=row["sort_order"],
+        sound_count=row["sound_count"] if "sound_count" in row.keys() else 0,
+        created_at=row["created_at"],
     )
 
 
@@ -739,6 +866,92 @@ def _ensure_saved_metadata_columns(connection: sqlite3.Connection) -> None:
     for name, definition in column_defaults.items():
         if name not in columns:
             connection.execute(f"ALTER TABLE saved_sounds ADD COLUMN {name} {definition}")
+
+
+def _ensure_saved_folder_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS saved_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def _sync_existing_saved_folders(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        SELECT DISTINCT folder
+        FROM saved_sounds
+        WHERE folder IS NOT NULL AND TRIM(folder) <> ''
+        ORDER BY LOWER(folder)
+        """
+    ).fetchall()
+    for row in rows:
+        _ensure_folder_named(connection, row[0])
+
+
+def _ensure_folder_named(connection: sqlite3.Connection, name: str) -> None:
+    folder_name = _normalize_folder_name(name)
+    if not folder_name:
+        return
+    existing = connection.execute(
+        "SELECT id FROM saved_folders WHERE name = ?",
+        (folder_name,),
+    ).fetchone()
+    if existing:
+        return
+    sort_order = connection.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_folders"
+    ).fetchone()[0]
+    connection.execute(
+        "INSERT INTO saved_folders (name, sort_order) VALUES (?, ?)",
+        (folder_name, sort_order),
+    )
+
+
+def _folder_row_by_id(connection: sqlite3.Connection, folder_id: int) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT
+            saved_folders.*,
+            (
+                SELECT COUNT(*)
+                FROM saved_sounds
+                WHERE saved_sounds.folder = saved_folders.name
+            ) AS sound_count
+        FROM saved_folders
+        WHERE id = ?
+        """,
+        (folder_id,),
+    ).fetchone()
+
+
+def _folder_row_by_name(connection: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT
+            saved_folders.*,
+            (
+                SELECT COUNT(*)
+                FROM saved_sounds
+                WHERE saved_sounds.folder = saved_folders.name
+            ) AS sound_count
+        FROM saved_folders
+        WHERE name = ?
+        """,
+        (name,),
+    ).fetchone()
+
+
+def _normalize_folder_name(name: str) -> str:
+    normalized = " ".join(str(name or "").split()).strip()
+    if normalized == "미분류":
+        return ""
+    return normalized[:80]
 
 
 def _ensure_feedback_source_columns(connection: sqlite3.Connection) -> None:

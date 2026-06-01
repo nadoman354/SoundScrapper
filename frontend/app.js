@@ -9,6 +9,8 @@ const savedFilterInput = document.querySelector("#saved-filter");
 const savedSortSelect = document.querySelector("#saved-sort");
 const savedCc0Input = document.querySelector("#saved-cc0");
 const savedGoodInput = document.querySelector("#saved-good");
+const newFolderInput = document.querySelector("#new-folder-name");
+const createFolderButton = document.querySelector("#create-folder");
 const favoriteSearchButton = document.querySelector("#favorite-search");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
@@ -16,6 +18,7 @@ const template = document.querySelector("#sound-card-template");
 
 let lastResults = [];
 let savedSounds = [];
+let savedFolders = [];
 let audioContext;
 const waveformCache = new Map();
 const feedbackSelections = new Map();
@@ -23,6 +26,7 @@ const cardContexts = new Map();
 const RECENT_SEARCHES_KEY = "soundscrapper.recentSearches";
 const FAVORITE_SEARCHES_KEY = "soundscrapper.favoriteSearches";
 const SAVED_FOLDER_STATE_KEY = "soundscrapper.savedFolderState";
+const SAVED_COLLAPSE_STATE_KEY = "soundscrapper.savedCollapseState";
 
 const LICENSE_LABELS = {
   "creative commons 0": "CC0",
@@ -212,6 +216,23 @@ function writeSavedFolderState(value) {
   localStorage.setItem(SAVED_FOLDER_STATE_KEY, JSON.stringify(value));
 }
 
+function readSavedCollapseState() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SAVED_COLLAPSE_STATE_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSavedCollapseState(value) {
+  localStorage.setItem(SAVED_COLLAPSE_STATE_KEY, JSON.stringify(value));
+}
+
+function savedCollapseKey(savedId) {
+  return `saved:${savedId}`;
+}
+
 function setConditionWarning(message) {
   conditionWarningEl.textContent = message;
   conditionWarningEl.classList.toggle("is-visible", Boolean(message));
@@ -318,6 +339,48 @@ function licenseCreditNote(license) {
 
 function sourceLabel(provider) {
   return SOURCE_LABELS[(provider || "").toLowerCase()] || provider || "Unknown";
+}
+
+function iconMarkup(name) {
+  const icons = {
+    download:
+      '<path d="M12 3v10"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
+    external:
+      '<path d="M14 3h7v7"></path><path d="m10 14 11-11"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path>',
+    trash:
+      '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 15h10l1-15"></path>',
+    pencil:
+      '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"></path><path d="M13.5 7.5l3 3"></path><path d="M3 3h18v18H3z"></path>',
+    collapse: '<path d="M6 9h12"></path><path d="m8 15 4-4 4 4"></path>',
+    expand: '<path d="M6 15h12"></path><path d="m8 9 4 4 4-4"></path>',
+    play: '<path d="m8 5 11 7-11 7V5Z"></path>',
+    grip: '<path d="M9 5h.01"></path><path d="M15 5h.01"></path><path d="M9 12h.01"></path><path d="M15 12h.01"></path><path d="M9 19h.01"></path><path d="M15 19h.01"></path>',
+    plus: '<path d="M12 5v14"></path><path d="M5 12h14"></path>',
+    archive: '<path d="M4 4h16v4H4z"></path><path d="M6 8v12h12V8"></path><path d="M10 12h4"></path>',
+  };
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.external}</svg>`;
+}
+
+function iconButton(label, icon, className = "icon-button") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = iconMarkup(icon);
+  return button;
+}
+
+function iconLink(label, icon, href) {
+  const link = document.createElement("a");
+  link.className = "icon-button";
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.title = label;
+  link.setAttribute("aria-label", label);
+  link.innerHTML = iconMarkup(icon);
+  return link;
 }
 
 function previewAudioUrl(sound) {
@@ -506,15 +569,22 @@ function renderSoundCard(sound) {
   syncSaveButton(saveButton, sound);
   saveButton.addEventListener("click", async () => {
     try {
-      const saved = await saveSound(sound);
-      upsertSavedSound(saved);
-      syncSaveButton(saveButton, sound);
-      setStatus(`저장됨: ${sound.name}`);
-      renderSaved();
+      if (savedIdentitySet().has(soundIdentity(sound))) {
+        await removeSavedBySound(sound);
+        syncSaveButton(saveButton, sound);
+        setStatus(`저장 해제: ${sound.name}`);
+        return;
+      }
+      if (savedFolders.length > 0) {
+        toggleSaveFolderMenu(node, sound);
+        return;
+      }
+      await saveSoundToFolder(sound, "");
     } catch (error) {
       setStatus(`저장 실패: ${translateError(error.message)}`);
     }
   });
+  renderSaveFolderMenu(node, sound);
 
   const downloadButton = node.querySelector("[data-action='download']");
   if (!sound.download_allowed || !(sound.download_url || sound.preview_url)) {
@@ -594,6 +664,57 @@ function syncRenderedSaveStates() {
     if (button) {
       syncSaveButton(button, sound);
     }
+    renderSaveFolderMenu(node, sound);
+  }
+}
+
+function renderSaveFolderMenu(node, sound) {
+  const scoreStack = node.querySelector(".score-stack");
+  if (!scoreStack) {
+    return;
+  }
+  let menu = node.querySelector(".save-folder-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.className = "save-folder-menu";
+    menu.hidden = true;
+    scoreStack.append(menu);
+  }
+  menu.replaceChildren();
+
+  const title = document.createElement("span");
+  title.textContent = "저장할 폴더";
+  menu.append(title);
+
+  const options = [{ folder_id: 0, name: "", label: "미분류" }].concat(
+    savedFolders.map((folder) => ({
+      folder_id: folder.folder_id,
+      name: folder.name,
+      label: folder.name,
+    }))
+  );
+
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = option.label;
+    button.addEventListener("click", async () => {
+      try {
+        await saveSoundToFolder(sound, option.name);
+        menu.hidden = true;
+      } catch (error) {
+        setStatus(`저장 실패: ${translateError(error.message)}`);
+      }
+    });
+    menu.append(button);
+  }
+}
+
+function toggleSaveFolderMenu(node, sound) {
+  renderSaveFolderMenu(node, sound);
+  const menu = node.querySelector(".save-folder-menu");
+  if (menu) {
+    menu.hidden = !menu.hidden;
   }
 }
 
@@ -1016,35 +1137,37 @@ function savedSorter(sortKey) {
 
 function renderSaved(sounds = filteredSavedSounds()) {
   savedEl.replaceChildren();
-  if (sounds.length === 0) {
+  const groups = savedFolderGroups(sounds);
+  if (groups.length === 0) {
     savedEl.append(emptyState("저장한 후보가 없습니다."));
     return;
   }
 
   const folderState = readSavedFolderState();
-  for (const [folderName, folderSounds] of savedFolderGroups(sounds)) {
+  for (const group of groups) {
     const folder = document.createElement("details");
     folder.className = "saved-folder";
-    const key = savedFolderKey(folderName);
+    folder.dataset.folderName = group.name;
+    folder.classList.toggle("is-unfiled", group.folder_id === 0);
+    const key = savedFolderKey(group.name);
     folder.open = folderState[key] !== false;
     folder.addEventListener("toggle", () => {
       const nextState = readSavedFolderState();
       nextState[key] = folder.open;
       writeSavedFolderState(nextState);
     });
+    setupFolderDropZone(folder, group.name);
 
-    const summary = document.createElement("summary");
-    const name = document.createElement("strong");
-    name.textContent = folderName;
-    const count = document.createElement("span");
-    count.textContent = `${folderSounds.length}개`;
-    summary.append(name, count);
-    folder.append(summary);
+    folder.append(renderSavedFolderSummary(group));
 
     const body = document.createElement("div");
     body.className = "saved-folder-body";
-    for (const [index, sound] of folderSounds.entries()) {
-      body.append(renderSavedItem(sound, defaultSavedDownloadName(folderName, index)));
+    if (group.sounds.length === 0) {
+      body.append(emptyState("이 폴더는 비어 있습니다."));
+    } else {
+      for (const [index, sound] of group.sounds.entries()) {
+        body.append(renderSavedItem(sound, defaultSavedDownloadName(group.label, index)));
+      }
     }
     folder.append(body);
     savedEl.append(folder);
@@ -1053,21 +1176,43 @@ function renderSaved(sounds = filteredSavedSounds()) {
 
 function savedFolderGroups(sounds) {
   const groups = new Map();
-  for (const sound of sounds) {
-    const folderName = (sound.folder || "").trim() || "미분류";
-    if (!groups.has(folderName)) {
-      groups.set(folderName, []);
-    }
-    groups.get(folderName).push(sound);
+  for (const folder of savedFolders) {
+    groups.set(folder.name, {
+      folder_id: folder.folder_id,
+      name: folder.name,
+      label: folder.name,
+      sounds: [],
+    });
   }
-  return Array.from(groups.entries()).sort(([leftName], [rightName]) => {
-    if (leftName === "미분류") {
+
+  for (const sound of sounds) {
+    const folderName = (sound.folder || "").trim();
+    const key = folderName || "";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        folder_id: folderName ? null : 0,
+        name: key,
+        label: folderName || "미분류",
+        sounds: [],
+      });
+    }
+    groups.get(key).sounds.push(sound);
+  }
+
+  const ordered = Array.from(groups.values());
+  return ordered.sort((left, right) => {
+    if (left.folder_id === 0) {
       return 1;
     }
-    if (rightName === "미분류") {
+    if (right.folder_id === 0) {
       return -1;
     }
-    return leftName.localeCompare(rightName, "ko");
+    if (left.folder_id && right.folder_id) {
+      const leftFolder = savedFolders.find((folder) => folder.folder_id === left.folder_id);
+      const rightFolder = savedFolders.find((folder) => folder.folder_id === right.folder_id);
+      return (leftFolder?.sort_order || 0) - (rightFolder?.sort_order || 0);
+    }
+    return left.label.localeCompare(right.label, "ko");
   });
 }
 
@@ -1080,50 +1225,168 @@ function defaultSavedDownloadName(folderName, index) {
   return `${baseName}_${index + 1}`;
 }
 
+function renderSavedFolderSummary(group) {
+  const summary = document.createElement("summary");
+  const title = document.createElement("div");
+  title.className = "saved-folder-title";
+  const name = document.createElement("strong");
+  name.textContent = group.label;
+  const count = document.createElement("span");
+  count.textContent = `${group.sounds.length}개`;
+  title.append(name, count);
+
+  const actions = document.createElement("div");
+  actions.className = "saved-folder-actions";
+
+  const downloadButton = iconButton("폴더 전체 다운로드", "archive");
+  downloadButton.disabled = !group.sounds.some(
+    (sound) => sound.download_allowed && (sound.download_url || sound.preview_url)
+  );
+  downloadButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    triggerFolderDownload(group);
+  });
+  actions.append(downloadButton);
+
+  if (group.folder_id) {
+    const renameButton = iconButton("폴더 이름 변경", "pencil");
+    renameButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      renameSavedFolderPrompt(group);
+    });
+    actions.append(renameButton);
+
+    const deleteButton = iconButton("폴더 삭제", "trash", "icon-button danger-button");
+    deleteButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteSavedFolderPrompt(group);
+    });
+    actions.append(deleteButton);
+  }
+
+  summary.append(title, actions);
+  return summary;
+}
+
+function setupFolderDropZone(folderNode, folderName) {
+  folderNode.addEventListener("dragover", (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes("text/plain")) {
+      return;
+    }
+    event.preventDefault();
+    folderNode.classList.add("is-drop-target");
+  });
+  folderNode.addEventListener("dragleave", () => {
+    folderNode.classList.remove("is-drop-target");
+  });
+  folderNode.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    folderNode.classList.remove("is-drop-target");
+    const savedId = Number.parseInt(event.dataTransfer.getData("text/plain"), 10);
+    if (!Number.isFinite(savedId)) {
+      return;
+    }
+    const sound = savedSounds.find((item) => item.saved_id === savedId);
+    if (!sound || (sound.folder || "").trim() === folderName) {
+      return;
+    }
+    await updateSavedMetadata(savedId, { folder: folderName });
+  });
+}
+
 function renderSavedItem(sound, defaultDownloadName) {
   const item = document.createElement("article");
+  const collapseState = readSavedCollapseState();
+  const isCollapsed = collapseState[savedCollapseKey(sound.saved_id)] === true;
   item.className = "saved-item";
+  item.classList.toggle("is-collapsed", isCollapsed);
   item.dataset.savedId = String(sound.saved_id);
+
+  const handle = document.createElement("div");
+  handle.className = "saved-drag-handle";
+  handle.draggable = true;
+  handle.title = "드래그해서 폴더 이동";
+  handle.innerHTML = iconMarkup("grip");
+  handle.addEventListener("dragstart", (event) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(sound.saved_id));
+  });
 
   const header = document.createElement("div");
   header.className = "saved-item-head";
+  const titleBlock = document.createElement("div");
+  titleBlock.className = "saved-title-block";
   const title = document.createElement("strong");
   title.textContent = sound.name;
-  header.append(title, renderSavedRatingControl(sound));
-
   const meta = document.createElement("span");
   meta.className = "saved-meta";
   meta.textContent =
     `${sourceLabel(sound.source_provider)} · ${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
+  titleBlock.append(title, meta);
+  header.append(titleBlock, renderSavedItemActions(sound, defaultDownloadName, item));
 
-  item.append(header, meta);
+  item.append(handle, header);
 
+  const audioWrap = document.createElement("div");
+  audioWrap.className = "saved-audio-wrap";
+  let audio = null;
   if (sound.preview_url) {
-    const audio = document.createElement("audio");
+    audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "none";
     audio.src = sound.preview_url;
-    item.append(audio);
+    audioWrap.append(audio);
+  } else {
+    audioWrap.append(emptyState("미리듣기 없음"));
   }
+  item.append(audioWrap, renderSavedRatingControl(sound), renderSavedNoteSummary(sound));
 
-  const feedback = renderSavedFeedback(sound.feedback_types || []);
-  if (feedback) {
-    item.append(feedback);
-  }
+  const editor = renderSavedEditor(sound, defaultDownloadName);
+  item.append(editor);
 
-  const labels = renderSavedLabels(sound.labels || []);
-  if (labels) {
-    item.append(labels);
-  }
+  const miniPlay = iconButton("간단 재생", "play", "saved-mini-play");
+  miniPlay.disabled = !audio;
+  miniPlay.addEventListener("click", () => {
+    if (!audio) {
+      return;
+    }
+    if (audio.paused) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  });
+  item.append(miniPlay);
+  return item;
+}
 
+function renderSavedItemActions(sound, defaultDownloadName, item) {
   const actions = document.createElement("div");
   actions.className = "saved-item-actions";
-  const downloadButton = document.createElement("button");
-  downloadButton.type = "button";
-  downloadButton.textContent = "다운로드";
+
+  const collapseButton = iconButton(
+    item.classList.contains("is-collapsed") ? "펼치기" : "최소화",
+    item.classList.contains("is-collapsed") ? "expand" : "collapse"
+  );
+  collapseButton.addEventListener("click", () => {
+    const state = readSavedCollapseState();
+    const key = savedCollapseKey(sound.saved_id);
+    const nextCollapsed = !item.classList.contains("is-collapsed");
+    state[key] = nextCollapsed;
+    writeSavedCollapseState(state);
+    item.classList.toggle("is-collapsed", nextCollapsed);
+    collapseButton.title = nextCollapsed ? "펼치기" : "최소화";
+    collapseButton.setAttribute("aria-label", nextCollapsed ? "펼치기" : "최소화");
+    collapseButton.innerHTML = iconMarkup(nextCollapsed ? "expand" : "collapse");
+  });
+  actions.append(collapseButton);
+
+  const downloadButton = iconButton("다운로드", "download");
   if (!sound.download_allowed || !(sound.download_url || sound.preview_url)) {
     downloadButton.disabled = true;
-    downloadButton.textContent = "다운로드 없음";
   } else {
     downloadButton.addEventListener("click", () =>
       triggerDownload(sound, downloadDisplayName(sound, defaultDownloadName))
@@ -1133,106 +1396,65 @@ function renderSavedItem(sound, defaultDownloadName) {
 
   const openUrl = originalSoundUrl(sound);
   if (openUrl) {
-    const openLink = document.createElement("a");
-    openLink.href = openUrl;
-    openLink.target = "_blank";
-    openLink.rel = "noreferrer";
-    openLink.textContent = "원본";
-    actions.append(openLink);
+    actions.append(iconLink("원본 보기", "external", openUrl));
   }
 
-  const deleteButton = document.createElement("button");
-  deleteButton.type = "button";
-  deleteButton.className = "danger-button";
-  deleteButton.textContent = "삭제";
+  const deleteButton = iconButton("삭제", "trash", "icon-button danger-button");
   deleteButton.addEventListener("click", async () => {
-    try {
-      await deleteSavedSound(sound.saved_id);
-      savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== sound.saved_id);
-      renderSaved();
-      syncRenderedSaveStates();
-      setStatus(`저장 후보 삭제: ${sound.name}`);
-    } catch (error) {
-      setStatus(`삭제 실패: ${translateError(error.message)}`);
-    }
+    await deleteSavedItem(sound);
   });
   actions.append(deleteButton);
-  item.append(actions);
 
-  const manage = document.createElement("details");
-  manage.className = "saved-manage";
-  const manageSummary = document.createElement("summary");
-  manageSummary.textContent = "관리";
-  manage.append(manageSummary, renderSavedEditor(sound, defaultDownloadName));
-  item.append(manage);
-  return item;
-}
-
-function renderSavedLabels(labels) {
-  const cleaned = (labels || []).filter(Boolean);
-  if (cleaned.length === 0) {
-    return null;
-  }
-  const container = document.createElement("div");
-  container.className = "saved-labels";
-  for (const label of cleaned.slice(0, 8)) {
-    const pill = document.createElement("span");
-    pill.textContent = label;
-    container.append(pill);
-  }
-  return container;
+  return actions;
 }
 
 function renderSavedRatingControl(sound) {
-  const rating = document.createElement("select");
-  rating.className = sound.fit_rating
-    ? "saved-rating-select is-rated"
-    : "saved-rating-select";
-  rating.setAttribute("aria-label", "적합도");
-  const emptyRating = document.createElement("option");
-  emptyRating.value = "";
-  emptyRating.textContent = "미평가";
-  rating.append(emptyRating);
-  for (let value = 5; value >= 1; value -= 1) {
-    const option = document.createElement("option");
-    option.value = String(value);
-    option.textContent = `${value}점`;
-    option.selected = sound.fit_rating === value;
-    rating.append(option);
-  }
-  rating.addEventListener("change", () => {
-    updateSavedMetadata(sound.saved_id, {
-      fit_rating: rating.value ? Number.parseInt(rating.value, 10) : null,
+  const row = document.createElement("div");
+  row.className = "saved-rating-row";
+  const label = document.createElement("span");
+  label.textContent = "적합도";
+  const scale = document.createElement("div");
+  scale.className = "saved-rating-scale";
+  for (let value = 1; value <= 5; value += 1) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = String(value);
+    button.title = `${value}점`;
+    button.classList.toggle("is-rated", sound.fit_rating === value);
+    button.setAttribute("aria-pressed", String(sound.fit_rating === value));
+    button.addEventListener("click", () => {
+      updateSavedMetadata(sound.saved_id, {
+        fit_rating: sound.fit_rating === value ? null : value,
+      });
     });
-  });
-  return rating;
+    scale.append(button);
+  }
+  row.append(label, scale);
+  return row;
+}
+
+function renderSavedNoteSummary(sound) {
+  const summary = document.createElement("p");
+  summary.className = "saved-note-summary";
+  summary.textContent = (sound.note || "").trim() || "메모 없음";
+  return summary;
 }
 
 function renderSavedEditor(sound, defaultDownloadName) {
   const editor = document.createElement("div");
   editor.className = "saved-editor";
 
-  const folderLabel = document.createElement("label");
-  folderLabel.textContent = "폴더";
-  const folder = document.createElement("input");
-  folder.type = "text";
-  folder.value = sound.folder || "";
-  folder.placeholder = "예: UI, 전투, 마법";
-  folder.addEventListener("change", () => {
-    updateSavedMetadata(sound.saved_id, { folder: folder.value.trim() });
+  const noteLabel = document.createElement("label");
+  noteLabel.className = "saved-note-field";
+  noteLabel.textContent = "메모";
+  const note = document.createElement("textarea");
+  note.value = sound.note || "";
+  note.placeholder = "사용할 장면, 컷 위치, 수정 필요점";
+  note.rows = 3;
+  note.addEventListener("change", () => {
+    updateSavedMetadata(sound.saved_id, { note: note.value });
   });
-  folderLabel.append(folder);
-
-  const labelsLabel = document.createElement("label");
-  labelsLabel.textContent = "라벨";
-  const labels = document.createElement("input");
-  labels.type = "text";
-  labels.value = (sound.labels || []).join(", ");
-  labels.placeholder = "쉼표로 구분";
-  labels.addEventListener("change", () => {
-    updateSavedMetadata(sound.saved_id, { labels: parseLabelInput(labels.value) });
-  });
-  labelsLabel.append(labels);
+  noteLabel.append(note);
 
   const downloadNameLabel = document.createElement("label");
   downloadNameLabel.textContent = "다운로드명";
@@ -1248,38 +1470,8 @@ function renderSavedEditor(sound, defaultDownloadName) {
   });
   downloadNameLabel.append(downloadName);
 
-  const noteLabel = document.createElement("label");
-  noteLabel.className = "saved-note-field";
-  noteLabel.textContent = "메모";
-  const note = document.createElement("textarea");
-  note.value = sound.note || "";
-  note.placeholder = "사용할 장면, 컷 위치, 수정 필요점";
-  note.rows = 3;
-  note.addEventListener("change", () => {
-    updateSavedMetadata(sound.saved_id, { note: note.value });
-  });
-  noteLabel.append(note);
-
-  editor.append(folderLabel, labelsLabel, downloadNameLabel, noteLabel);
+  editor.append(noteLabel, downloadNameLabel);
   return editor;
-}
-
-function parseLabelInput(value) {
-  const seen = new Set();
-  const labels = [];
-  for (const raw of value.split(",")) {
-    const label = raw.trim();
-    const key = label.toLowerCase();
-    if (!label || seen.has(key)) {
-      continue;
-    }
-    labels.push(label);
-    seen.add(key);
-    if (labels.length === 20) {
-      break;
-    }
-  }
-  return labels;
 }
 
 function renderSavedFeedback(feedbackTypes) {
@@ -1342,6 +1534,35 @@ async function saveSound(sound) {
   });
 }
 
+async function saveSoundToFolder(sound, folderName) {
+  let saved = await saveSound(sound);
+  const normalizedFolder = (folderName || "").trim();
+  if ((saved.folder || "") !== normalizedFolder) {
+    saved = await apiFetch(`/api/saved-sounds/${saved.saved_id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ folder: normalizedFolder }),
+    });
+  }
+  upsertSavedSound(saved);
+  await loadSavedFolders({ render: false });
+  renderSaved();
+  syncRenderedSaveStates();
+  setStatus(`저장됨: ${sound.name}${normalizedFolder ? ` · ${normalizedFolder}` : " · 미분류"}`);
+  return saved;
+}
+
+async function removeSavedBySound(sound) {
+  const saved = savedSounds.find((item) => soundIdentity(item) === soundIdentity(sound));
+  if (!saved) {
+    return;
+  }
+  await deleteSavedSound(saved.saved_id);
+  savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== saved.saved_id);
+  await loadSavedFolders({ render: false });
+  renderSaved();
+  syncRenderedSaveStates();
+}
+
 async function updateSavedMetadata(savedId, update) {
   try {
     const saved = await apiFetch(`/api/saved-sounds/${savedId}`, {
@@ -1349,11 +1570,16 @@ async function updateSavedMetadata(savedId, update) {
       body: JSON.stringify(update),
     });
     replaceSavedSound(saved);
+    if (Object.prototype.hasOwnProperty.call(update, "folder")) {
+      await loadSavedFolders({ render: false });
+    }
     renderSaved();
     syncRenderedSaveStates();
     setStatus(`저장 후보 수정: ${saved.name}`);
+    return saved;
   } catch (error) {
     setStatus(`저장 후보 수정 실패: ${translateError(error.message)}`);
+    return null;
   }
 }
 
@@ -1361,6 +1587,83 @@ async function deleteSavedSound(savedId) {
   return apiFetch(`/api/saved-sounds/${savedId}`, {
     method: "DELETE",
   });
+}
+
+async function deleteSavedItem(sound) {
+  try {
+    await deleteSavedSound(sound.saved_id);
+    savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== sound.saved_id);
+    await loadSavedFolders({ render: false });
+    renderSaved();
+    syncRenderedSaveStates();
+    setStatus(`저장 후보 삭제: ${sound.name}`);
+  } catch (error) {
+    setStatus(`삭제 실패: ${translateError(error.message)}`);
+  }
+}
+
+async function createSavedFolder(name) {
+  return apiFetch("/api/saved-folders", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+async function renameSavedFolder(folderId, name) {
+  return apiFetch(`/api/saved-folders/${folderId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+async function deleteSavedFolder(folderId) {
+  return apiFetch(`/api/saved-folders/${folderId}`, {
+    method: "DELETE",
+  });
+}
+
+function triggerFolderDownload(group) {
+  const link = document.createElement("a");
+  const params = new URLSearchParams({
+    saved_ids: group.sounds.map((sound) => String(sound.saved_id)).join(","),
+  });
+  link.href = `/api/saved-folders/${group.folder_id || 0}/download?${params.toString()}`;
+  link.download = "";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setStatus(`폴더 전체 다운로드 시작: ${group.label}`);
+}
+
+async function renameSavedFolderPrompt(group) {
+  const nextName = window.prompt("새 폴더명", group.label);
+  if (nextName === null) {
+    return;
+  }
+  const trimmed = nextName.trim();
+  if (!trimmed || trimmed === group.label) {
+    return;
+  }
+  try {
+    await renameSavedFolder(group.folder_id, trimmed);
+    await loadSavedSounds();
+    setStatus(`폴더 이름 변경: ${group.label} → ${trimmed}`);
+  } catch (error) {
+    setStatus(`폴더 이름 변경 실패: ${translateError(error.message)}`);
+  }
+}
+
+async function deleteSavedFolderPrompt(group) {
+  if (!window.confirm(`"${group.label}" 폴더만 삭제하고 안의 사운드는 미분류로 이동할까요?`)) {
+    return;
+  }
+  try {
+    await deleteSavedFolder(group.folder_id);
+    await loadSavedSounds();
+    setStatus(`폴더 삭제: ${group.label} · 사운드는 미분류로 이동했습니다.`);
+  } catch (error) {
+    setStatus(`폴더 삭제 실패: ${translateError(error.message)}`);
+  }
 }
 
 async function saveAnalysis(analysis) {
@@ -1648,9 +1951,24 @@ function roundMetric(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+async function loadSavedFolders(options = {}) {
+  const { render = true } = options;
+  savedFolders = await apiFetch("/api/saved-folders");
+  if (render) {
+    renderSaved();
+    syncRenderedSaveStates();
+  }
+  return savedFolders;
+}
+
 async function loadSavedSounds() {
   try {
-    savedSounds = await apiFetch("/api/saved-sounds");
+    const [sounds, folders] = await Promise.all([
+      apiFetch("/api/saved-sounds"),
+      apiFetch("/api/saved-folders"),
+    ]);
+    savedSounds = sounds;
+    savedFolders = folders;
     renderSaved();
     syncRenderedSaveStates();
   } catch (error) {
@@ -1686,6 +2004,27 @@ savedSortSelect.addEventListener("change", () => renderSaved());
 savedCc0Input.addEventListener("change", () => renderSaved());
 savedGoodInput.addEventListener("change", () => renderSaved());
 favoriteSearchButton.addEventListener("click", toggleFavoriteSearch);
+createFolderButton.addEventListener("click", async () => {
+  const name = newFolderInput.value.trim();
+  if (!name) {
+    setStatus("새 폴더명을 입력하세요.");
+    return;
+  }
+  try {
+    await createSavedFolder(name);
+    newFolderInput.value = "";
+    await loadSavedFolders();
+    setStatus(`폴더 생성: ${name}`);
+  } catch (error) {
+    setStatus(`폴더 생성 실패: ${translateError(error.message)}`);
+  }
+});
+newFolderInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    createFolderButton.click();
+  }
+});
 setupSearchModeConflicts();
 renderSearchMemory();
 loadProviderStatus();
