@@ -131,6 +131,17 @@ class SavedSound(BaseModel):
     attribution_text: str | None = None
     download_url: str | None = None
     download_allowed: bool = True
+    note: str = ""
+    fit_rating: int | None = Field(None, ge=1, le=5)
+    folder: str = ""
+    labels: list[str] = Field(default_factory=list)
+
+
+class SavedSoundUpdate(BaseModel):
+    note: str | None = Field(None, max_length=2000)
+    fit_rating: int | None = Field(None, ge=1, le=5)
+    folder: str | None = Field(None, max_length=80)
+    labels: list[str] | None = Field(None, max_length=20)
 
 
 class FeedbackRequest(BaseModel):

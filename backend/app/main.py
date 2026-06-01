@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.config import Settings, get_settings
 from backend.app.db import (
+    delete_saved_sound,
     feedback_adjustment,
     get_analysis,
     initialize_db,
@@ -19,6 +20,7 @@ from backend.app.db import (
     save_analysis,
     save_feedback,
     save_sound,
+    update_saved_sound,
 )
 from backend.app.freesound_client import FreesoundClient, FreesoundConfigurationError
 from backend.app.jamendo_client import JamendoClient, JamendoConfigurationError
@@ -27,13 +29,14 @@ from backend.app.preview_cache import PreviewCacheError, cache_preview_audio, me
 from backend.app.prompt_parser import parse_prompt
 from backend.app.ranker import score_sound, sort_ranked
 from backend.app.schemas import (
-    HealthResponse,
     FeedbackRequest,
     FeedbackResponse,
+    HealthResponse,
     PreviewCacheResponse,
     ProviderStatus,
     ProviderStatusResponse,
     SavedSound,
+    SavedSoundUpdate,
     SearchRequest,
     SearchResponse,
     SoundAnalysis,
@@ -191,6 +194,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_saved_sounds(fastapi_request: Request) -> list[SavedSound]:
         request_settings: Settings = fastapi_request.app.state.settings
         return list_saved_sounds(request_settings.database_path)
+
+    @app.patch("/api/saved-sounds/{saved_id}", response_model=SavedSound)
+    def patch_saved_sound(
+        saved_id: int,
+        update: SavedSoundUpdate,
+        fastapi_request: Request,
+    ) -> SavedSound:
+        request_settings: Settings = fastapi_request.app.state.settings
+        saved = update_saved_sound(request_settings.database_path, saved_id, update)
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Saved sound was not found.")
+        return saved
+
+    @app.delete("/api/saved-sounds/{saved_id}", status_code=204)
+    def remove_saved_sound(saved_id: int, fastapi_request: Request) -> None:
+        request_settings: Settings = fastapi_request.app.state.settings
+        deleted = delete_saved_sound(request_settings.database_path, saved_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Saved sound was not found.")
 
     @app.get("/api/preview-audio/{sound_id}")
     async def get_preview_audio(sound_id: int, preview_url: str, fastapi_request: Request) -> FileResponse:

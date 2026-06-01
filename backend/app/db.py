@@ -7,8 +7,9 @@ from pathlib import Path
 from backend.app.schemas import (
     FeedbackRequest,
     FeedbackResponse,
-    SoundAnalysis,
     SavedSound,
+    SavedSoundUpdate,
+    SoundAnalysis,
     SoundSearchResult,
 )
 
@@ -34,6 +35,10 @@ CREATE TABLE IF NOT EXISTS saved_sounds (
     attribution_text TEXT,
     download_url TEXT,
     download_allowed INTEGER NOT NULL DEFAULT 1,
+    note TEXT NOT NULL DEFAULT '',
+    fit_rating INTEGER,
+    folder TEXT NOT NULL DEFAULT '',
+    labels TEXT NOT NULL DEFAULT '[]',
     saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -75,6 +80,7 @@ def initialize_db(database_path: Path) -> None:
         connection.executescript(SCHEMA)
         _ensure_analysis_duration_column(connection)
         _ensure_saved_source_columns(connection)
+        _ensure_saved_metadata_columns(connection)
         _ensure_feedback_source_columns(connection)
         connection.commit()
 
@@ -176,6 +182,66 @@ def list_saved_sounds(database_path: Path) -> list[SavedSound]:
         ).fetchall()
 
     return [_row_to_saved_sound(row) for row in rows]
+
+
+def update_saved_sound(
+    database_path: Path,
+    saved_id: int,
+    update: SavedSoundUpdate,
+) -> SavedSound | None:
+    initialize_db(database_path)
+    fields_set = _model_fields_set(update)
+    assignments: list[str] = []
+    values: list[object] = []
+
+    if "note" in fields_set:
+        assignments.append("note = ?")
+        values.append(update.note or "")
+    if "fit_rating" in fields_set:
+        assignments.append("fit_rating = ?")
+        values.append(update.fit_rating)
+    if "folder" in fields_set:
+        assignments.append("folder = ?")
+        values.append((update.folder or "").strip())
+    if "labels" in fields_set:
+        assignments.append("labels = ?")
+        values.append(json.dumps(_clean_labels(update.labels or []), ensure_ascii=False))
+
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        if assignments:
+            values.append(saved_id)
+            connection.execute(
+                f"UPDATE saved_sounds SET {', '.join(assignments)} WHERE id = ?",
+                values,
+            )
+            connection.commit()
+
+        row = connection.execute(
+            """
+            SELECT
+                saved_sounds.*,
+                (
+                    SELECT GROUP_CONCAT(DISTINCT feedback_type)
+                    FROM sound_feedback
+                    WHERE sound_feedback.source_provider = saved_sounds.source_provider
+                        AND sound_feedback.source_id = saved_sounds.source_id
+                ) AS feedback_types
+            FROM saved_sounds
+            WHERE id = ?
+            """,
+            (saved_id,),
+        ).fetchone()
+
+    return _row_to_saved_sound(row) if row else None
+
+
+def delete_saved_sound(database_path: Path, saved_id: int) -> bool:
+    initialize_db(database_path)
+    with sqlite3.connect(database_path) as connection:
+        cursor = connection.execute("DELETE FROM saved_sounds WHERE id = ?", (saved_id,))
+        connection.commit()
+        return cursor.rowcount > 0
 
 
 def save_analysis(database_path: Path, analysis: SoundAnalysis) -> SoundAnalysis:
@@ -375,6 +441,7 @@ def feedback_adjustment(
 
 def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
     tags = json.loads(row["tags"]) if row["tags"] else []
+    labels = json.loads(row["labels"]) if "labels" in row.keys() and row["labels"] else []
     feedback_types = []
     if "feedback_types" in row.keys() and row["feedback_types"]:
         feedback_types = [item for item in row["feedback_types"].split(",") if item]
@@ -400,6 +467,10 @@ def _row_to_saved_sound(row: sqlite3.Row) -> SavedSound:
         attribution_text=row["attribution_text"],
         download_url=row["download_url"],
         download_allowed=bool(row["download_allowed"]),
+        note=row["note"] if "note" in row.keys() else "",
+        fit_rating=row["fit_rating"] if "fit_rating" in row.keys() else None,
+        folder=row["folder"] if "folder" in row.keys() else "",
+        labels=labels,
     )
 
 
@@ -648,6 +719,22 @@ def _ensure_saved_source_columns(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_saved_metadata_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(saved_sounds)").fetchall()
+    }
+    column_defaults = {
+        "note": "TEXT NOT NULL DEFAULT ''",
+        "fit_rating": "INTEGER",
+        "folder": "TEXT NOT NULL DEFAULT ''",
+        "labels": "TEXT NOT NULL DEFAULT '[]'",
+    }
+    for name, definition in column_defaults.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE saved_sounds ADD COLUMN {name} {definition}")
+
+
 def _ensure_feedback_source_columns(connection: sqlite3.Connection) -> None:
     columns = {
         row[1]
@@ -669,3 +756,24 @@ def _ensure_feedback_source_columns(connection: sqlite3.Connection) -> None:
             source_id = COALESCE(NULLIF(source_id, ''), CAST(freesound_id AS TEXT))
         """
     )
+
+
+def _clean_labels(labels: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        normalized = label.strip()
+        if not normalized or normalized.lower() in seen:
+            continue
+        cleaned.append(normalized[:40])
+        seen.add(normalized.lower())
+        if len(cleaned) == 20:
+            break
+    return cleaned
+
+
+def _model_fields_set(model: SavedSoundUpdate) -> set[str]:
+    fields = getattr(model, "model_fields_set", None)
+    if fields is not None:
+        return set(fields)
+    return set(getattr(model, "__fields_set__", set()))

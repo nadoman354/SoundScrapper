@@ -8,7 +8,7 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="toolbar" aria-label="사운드 검색 조건">
+      <header class="app-header">
         <div class="brand">
           <div class="mark" aria-hidden="true">
             <span></span><span></span><span></span><span></span><span></span>
@@ -18,7 +18,9 @@
             <p>사운드 후보 탐색기</p>
           </div>
         </div>
+      </header>
 
+      <section class="toolbar" aria-label="사운드 검색 조건">
         <form id="search-form" class="search-form">
           <label class="prompt-field">
             <span>검색 프롬프트</span>
@@ -157,6 +159,7 @@
             <input id="saved-filter" type="search" placeholder="저장 후보 필터" />
             <select id="saved-sort" aria-label="저장 후보 정렬">
               <option value="recent">최근 저장순</option>
+              <option value="fit">적합도 높은 순</option>
               <option value="score">점수 높은 순</option>
               <option value="duration_asc">짧은 순</option>
               <option value="duration_desc">긴 순</option>
@@ -183,43 +186,32 @@
             <h3></h3>
             <p class="meta"></p>
           </div>
-          <strong class="score" aria-label="점수"></strong>
+          <div class="score-stack">
+            <strong class="score" aria-label="점수"></strong>
+            <button class="save-icon" type="button" data-action="save" aria-pressed="false" aria-label="저장">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 3.75A2.25 2.25 0 0 1 8.25 1.5h7.5A2.25 2.25 0 0 1 18 3.75v18l-6-3.25-6 3.25v-18Z"></path>
+              </svg>
+              <span>저장</span>
+            </button>
+          </div>
         </div>
         <div class="loud-warning" hidden>청취 주의: 음량이 큼</div>
         <audio controls preload="none"></audio>
-        <p class="license-note"></p>
-        <p class="attribution-note"></p>
         <div class="fit-badges"></div>
-        <div class="score-reasons"></div>
-        <div class="waveform-panel" hidden>
-          <canvas class="waveform-canvas" width="640" height="96"></canvas>
-          <div class="analysis-metrics"></div>
-        </div>
-        <p class="description"></p>
         <div class="tags"></div>
-        <div class="analysis-actions">
-          <button type="button" data-action="waveform">파형 보기</button>
-          <button type="button" data-action="loop" aria-pressed="false">루프 듣기</button>
-          <button type="button" data-action="loop-start">A</button>
-          <button type="button" data-action="loop-end">B</button>
-          <button type="button" data-action="segment-loop" aria-pressed="false">구간 루프</button>
-          <button type="button" data-action="clear-loop">해제</button>
-          <span class="loop-status">루프 꺼짐</span>
-        </div>
+
         <div class="feedback-actions" aria-label="사용자 평가">
-          <div class="feedback-group" aria-label="전체 평가">
-            <span class="feedback-title">전체</span>
+          <div class="feedback-group feedback-primary" aria-label="전체 평가">
             <button type="button" data-feedback="good" data-feedback-group="preference" aria-pressed="false">좋음</button>
             <button type="button" data-feedback="bad" data-feedback-group="preference" aria-pressed="false">별로</button>
           </div>
-          <div class="feedback-group" aria-label="활용성 평가">
+          <div class="feedback-group feedback-details positive-reasons" aria-label="좋았던 점" hidden>
             <span class="feedback-title">활용성</span>
             <button type="button" data-feedback="game_like" aria-pressed="false">게임적임</button>
             <button type="button" data-feedback="asset_ready" aria-pressed="false">에셋활용 가능</button>
             <button type="button" data-feedback="easy_cut" aria-pressed="false">컷오프 쉬움</button>
             <button type="button" data-feedback="loop_good" aria-pressed="false">루프 좋음</button>
-          </div>
-          <div class="feedback-group" aria-label="음색 평가">
             <span class="feedback-title">음색</span>
             <button type="button" data-feedback="heavy_good" aria-pressed="false">묵직함 좋음</button>
             <button type="button" data-feedback="sharp_good" aria-pressed="false">날카로움 좋음</button>
@@ -238,10 +230,30 @@
           </div>
         </div>
         <div class="card-actions">
-          <a target="_blank" rel="noreferrer">원본 보기</a>
           <button type="button" data-action="download">다운로드</button>
-          <button type="button" data-action="save">저장</button>
+          <a data-action="open" target="_blank" rel="noreferrer">원본 보기</a>
+          <button type="button" data-action="details">상세</button>
         </div>
+        <details class="card-details">
+          <summary>상세 정보와 고급 청취</summary>
+          <p class="license-note"></p>
+          <p class="attribution-note"></p>
+          <div class="score-reasons"></div>
+          <p class="description"></p>
+          <div class="analysis-actions">
+            <button type="button" data-action="waveform">파형 보기</button>
+            <button type="button" data-action="loop" aria-pressed="false">루프 듣기</button>
+            <button type="button" data-action="loop-start">A</button>
+            <button type="button" data-action="loop-end">B</button>
+            <button type="button" data-action="segment-loop" aria-pressed="false">구간 루프</button>
+            <button type="button" data-action="clear-loop">해제</button>
+            <span class="loop-status">Loop: Off</span>
+          </div>
+          <div class="waveform-panel" hidden>
+            <canvas class="waveform-canvas" width="640" height="96"></canvas>
+            <div class="analysis-metrics"></div>
+          </div>
+        </details>
       </article>
     </template>
 

@@ -9,12 +9,14 @@ from fastapi.testclient import TestClient
 
 from backend.app.config import Settings, _normalize_openverse_base_url
 from backend.app.db import (
+    delete_saved_sound,
     feedback_adjustment,
     get_analysis,
     list_saved_sounds,
     save_analysis,
     save_feedback,
     save_sound,
+    update_saved_sound,
 )
 from backend.app.freesound_client import FreesoundClient, build_filter
 from backend.app.jamendo_client import JamendoClient
@@ -23,7 +25,7 @@ from backend.app.openverse_client import OpenverseClient
 from backend.app.prompt_parser import parse_prompt
 from backend.app.preview_cache import cache_preview_audio, is_allowed_preview_url
 from backend.app.ranker import score_sound
-from backend.app.schemas import FeedbackRequest, SoundAnalysis, SoundSearchResult
+from backend.app.schemas import FeedbackRequest, SavedSoundUpdate, SoundAnalysis, SoundSearchResult
 
 
 def test_parse_prompt_expands_korean_keywords() -> None:
@@ -237,6 +239,61 @@ def test_db_save_and_list_round_trip(tmp_path: Path) -> None:
     assert listed[0].source_id == "10"
 
 
+def test_saved_sound_metadata_can_be_updated_and_preserved(tmp_path: Path) -> None:
+    database_path = tmp_path / "saved-metadata.db"
+    sound = SoundSearchResult(
+        id=12,
+        name="Magic Hit",
+        username="tester",
+        license="Creative Commons 0",
+        duration=0.8,
+        tags=["magic", "hit"],
+        score=76,
+        source_provider="freesound",
+        source_id="12",
+    )
+
+    saved = save_sound(database_path, sound)
+    updated = update_saved_sound(
+        database_path,
+        saved.saved_id,
+        SavedSoundUpdate(
+            note="전투 히트 후보",
+            fit_rating=4,
+            folder="전투",
+            labels=["magic", "impact", "magic"],
+        ),
+    )
+
+    assert updated is not None
+    assert updated.note == "전투 히트 후보"
+    assert updated.fit_rating == 4
+    assert updated.folder == "전투"
+    assert updated.labels == ["magic", "impact"]
+
+    sound_data = sound.model_dump() if hasattr(sound, "model_dump") else sound.dict()
+    save_sound(database_path, SoundSearchResult(**{**sound_data, "score": 91}))
+    listed = list_saved_sounds(database_path)
+
+    assert listed[0].score == 91
+    assert listed[0].note == "전투 히트 후보"
+    assert listed[0].fit_rating == 4
+    assert listed[0].folder == "전투"
+    assert listed[0].labels == ["magic", "impact"]
+
+
+def test_delete_saved_sound_removes_only_saved_candidate(tmp_path: Path) -> None:
+    database_path = tmp_path / "delete-saved.db"
+    first = save_sound(database_path, SoundSearchResult(id=13, name="Keep"))
+    second = save_sound(database_path, SoundSearchResult(id=14, name="Remove"))
+
+    assert delete_saved_sound(database_path, second.saved_id) is True
+    assert delete_saved_sound(database_path, second.saved_id) is False
+
+    listed = list_saved_sounds(database_path)
+    assert [sound.saved_id for sound in listed] == [first.saved_id]
+
+
 def test_saved_sounds_include_feedback_types(tmp_path: Path) -> None:
     database_path = tmp_path / "saved-feedback.db"
     sound = SoundSearchResult(
@@ -293,6 +350,52 @@ def test_api_health_and_saved_sounds(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert client.get("/api/saved-sounds").json()[0]["id"] == 20
+
+
+def test_api_updates_and_deletes_saved_sound_metadata(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        database_path=tmp_path / "api-metadata.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/saved-sounds",
+        json={
+            "id": 21,
+            "name": "Loop Candidate",
+            "license": "CC BY",
+            "duration": 12,
+            "score": 68,
+            "source_provider": "jamendo",
+            "source_id": "track-21",
+        },
+    ).json()
+
+    response = client.patch(
+        f"/api/saved-sounds/{created['saved_id']}",
+        json={
+            "note": "BGM 루프 후보",
+            "fit_rating": 5,
+            "folder": "BGM",
+            "labels": ["loop", "menu"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["note"] == "BGM 루프 후보"
+    assert body["fit_rating"] == 5
+    assert body["folder"] == "BGM"
+    assert body["labels"] == ["loop", "menu"]
+
+    delete_response = client.delete(f"/api/saved-sounds/{created['saved_id']}")
+
+    assert delete_response.status_code == 204
+    assert client.get("/api/saved-sounds").json() == []
 
 
 def test_provider_status_reports_config_without_exposing_secrets(tmp_path: Path) -> None:

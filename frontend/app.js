@@ -22,6 +22,7 @@ const feedbackSelections = new Map();
 const cardContexts = new Map();
 const RECENT_SEARCHES_KEY = "soundscrapper.recentSearches";
 const FAVORITE_SEARCHES_KEY = "soundscrapper.favoriteSearches";
+const SAVED_FOLDER_STATE_KEY = "soundscrapper.savedFolderState";
 
 const LICENSE_LABELS = {
   "creative commons 0": "CC0",
@@ -171,6 +172,46 @@ function buildSearchPayload() {
   };
 }
 
+function soundIdentity(sound) {
+  return `${sound.source_provider || "freesound"}:${sound.source_id || sound.id}`;
+}
+
+function savedIdentitySet() {
+  return new Set(savedSounds.map((sound) => soundIdentity(sound)));
+}
+
+function upsertSavedSound(savedSound) {
+  const identity = soundIdentity(savedSound);
+  const index = savedSounds.findIndex((sound) => soundIdentity(sound) === identity);
+  if (index >= 0) {
+    savedSounds[index] = savedSound;
+  } else {
+    savedSounds.unshift(savedSound);
+  }
+}
+
+function replaceSavedSound(savedSound) {
+  const index = savedSounds.findIndex((sound) => sound.saved_id === savedSound.saved_id);
+  if (index >= 0) {
+    savedSounds[index] = savedSound;
+  } else {
+    upsertSavedSound(savedSound);
+  }
+}
+
+function readSavedFolderState() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SAVED_FOLDER_STATE_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSavedFolderState(value) {
+  localStorage.setItem(SAVED_FOLDER_STATE_KEY, JSON.stringify(value));
+}
+
 function setConditionWarning(message) {
   conditionWarningEl.textContent = message;
   conditionWarningEl.classList.toggle("is-visible", Boolean(message));
@@ -223,7 +264,12 @@ async function apiFetch(url, options = {}) {
     throw new Error(message);
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return null;
+  }
+
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
 function translateError(message) {
@@ -271,9 +317,13 @@ function downloadPreviewUrl(sound) {
   return `/api/download-preview/${sound.id}?${params.toString()}`;
 }
 
-function renderTags(container, tags) {
+function originalSoundUrl(sound) {
+  return sound.source_url || sound.url || "";
+}
+
+function renderTags(container, tags, limit = 5) {
   container.replaceChildren();
-  for (const tag of tags.slice(0, 8)) {
+  for (const tag of tags.slice(0, limit)) {
     const pill = document.createElement("span");
     pill.textContent = tag;
     container.append(pill);
@@ -414,20 +464,24 @@ function renderSoundCard(sound) {
   cardContexts.set(sound.id, { sound, node, audio, loopState, loopControls });
 
   node.querySelector(".description").textContent = sound.description || "";
-  renderTags(node.querySelector(".tags"), sound.tags || []);
+  renderTags(node.querySelector(".tags"), sound.tags || [], 5);
 
-  const link = node.querySelector("a");
-  if (sound.url) {
-    link.href = sound.url;
+  const link = node.querySelector("[data-action='open']");
+  if (originalSoundUrl(sound)) {
+    link.href = originalSoundUrl(sound);
   } else {
     link.remove();
   }
 
-  node.querySelector("[data-action='save']").addEventListener("click", async () => {
+  const saveButton = node.querySelector("[data-action='save']");
+  syncSaveButton(saveButton, sound);
+  saveButton.addEventListener("click", async () => {
     try {
-      await saveSound(sound);
+      const saved = await saveSound(sound);
+      upsertSavedSound(saved);
+      syncSaveButton(saveButton, sound);
       setStatus(`저장됨: ${sound.name}`);
-      await loadSavedSounds();
+      renderSaved();
     } catch (error) {
       setStatus(`저장 실패: ${translateError(error.message)}`);
     }
@@ -442,6 +496,16 @@ function renderSoundCard(sound) {
       triggerDownload(sound);
     });
   }
+
+  const detailsButton = node.querySelector("[data-action='details']");
+  const details = node.querySelector(".card-details");
+  detailsButton.addEventListener("click", () => {
+    details.open = !details.open;
+    detailsButton.textContent = details.open ? "접기" : "상세";
+  });
+  details.addEventListener("toggle", () => {
+    detailsButton.textContent = details.open ? "접기" : "상세";
+  });
 
   const waveformButton = node.querySelector("[data-action='waveform']");
 
@@ -462,7 +526,12 @@ function renderSoundCard(sound) {
         await sendFeedback(sound, feedbackType, nextActive);
         markFeedbackSelected(sound.id, feedbackType, node, nextActive);
         const action = nextActive ? "저장됨" : "해제됨";
-        const suffix = feedbackType === "bad" && nextActive ? " · 이유를 선택해 주세요" : "";
+        let suffix = "";
+        if (feedbackType === "bad" && nextActive) {
+          suffix = " · 마음에 안 든 점을 선택해 주세요";
+        } else if (feedbackType === "good" && nextActive) {
+          suffix = " · 좋았던 점을 더 선택할 수 있습니다";
+        }
         setStatus(`평가 ${action}: ${FEEDBACK_LABELS[feedbackType]} · ${sound.name}${suffix}`);
       } catch (error) {
         setStatus(`평가 저장 실패: ${translateError(error.message)}`);
@@ -474,6 +543,26 @@ function renderSoundCard(sound) {
   hydrateStoredAnalysis(sound, node);
 
   return node;
+}
+
+function syncSaveButton(button, sound) {
+  const saved = savedIdentitySet().has(soundIdentity(sound));
+  button.classList.toggle("is-saved", saved);
+  button.setAttribute("aria-pressed", String(saved));
+  button.setAttribute("aria-label", saved ? "저장됨" : "저장");
+  const label = button.querySelector("span");
+  if (label) {
+    label.textContent = saved ? "저장됨" : "저장";
+  }
+}
+
+function syncRenderedSaveStates() {
+  for (const { sound, node } of cardContexts.values()) {
+    const button = node.querySelector("[data-action='save']");
+    if (button) {
+      syncSaveButton(button, sound);
+    }
+  }
 }
 
 function renderAttributionNote(container, sound) {
@@ -605,9 +694,16 @@ function setFeedbackButtonPressed(button, selected) {
 }
 
 function syncBadReasonVisibility(node) {
+  const goodButton = node.querySelector('[data-feedback="good"]');
   const badButton = node.querySelector('[data-feedback="bad"]');
+  const positiveReasons = node.querySelector(".positive-reasons");
   const badReasons = node.querySelector(".bad-reasons");
+  const goodSelected = goodButton?.getAttribute("aria-pressed") === "true";
   const badSelected = badButton?.getAttribute("aria-pressed") === "true";
+  if (positiveReasons) {
+    positiveReasons.hidden = !goodSelected;
+    positiveReasons.classList.toggle("is-highlighted", goodSelected);
+  }
   if (!badReasons) {
     return;
   }
@@ -809,6 +905,9 @@ function filteredSavedSounds() {
         sound.username,
         licenseLabel(sound.license),
         sourceLabel(sound.source_provider),
+        sound.note || "",
+        sound.folder || "",
+        ...(sound.labels || []),
         ...(sound.tags || []),
       ]
         .join(" ")
@@ -831,6 +930,10 @@ function savedSorter(sortKey) {
   const byRecent = (left, right) => String(right.saved_at).localeCompare(String(left.saved_at));
   const sorters = {
     recent: byRecent,
+    fit: (left, right) =>
+      (right.fit_rating || 0) - (left.fit_rating || 0) ||
+      right.score - left.score ||
+      byRecent(left, right),
     score: (left, right) => right.score - left.score || byRecent(left, right),
     duration_asc: (left, right) => left.duration - right.duration || byRecent(left, right),
     duration_desc: (left, right) => right.duration - left.duration || byRecent(left, right),
@@ -845,24 +948,239 @@ function renderSaved(sounds = filteredSavedSounds()) {
     return;
   }
 
-  for (const sound of sounds) {
-    const item = document.createElement("article");
-    item.className = "saved-item";
+  const folderState = readSavedFolderState();
+  for (const [folderName, folderSounds] of savedFolderGroups(sounds)) {
+    const folder = document.createElement("details");
+    folder.className = "saved-folder";
+    const key = savedFolderKey(folderName);
+    folder.open = folderState[key] !== false;
+    folder.addEventListener("toggle", () => {
+      const nextState = readSavedFolderState();
+      nextState[key] = folder.open;
+      writeSavedFolderState(nextState);
+    });
 
-    const title = document.createElement("strong");
-    title.textContent = sound.name;
+    const summary = document.createElement("summary");
+    const name = document.createElement("strong");
+    name.textContent = folderName;
+    const count = document.createElement("span");
+    count.textContent = `${folderSounds.length}개`;
+    summary.append(name, count);
+    folder.append(summary);
 
-    const meta = document.createElement("span");
-    meta.textContent =
-      `${sourceLabel(sound.source_provider)} · ${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
-
-    item.append(title, meta);
-    const feedback = renderSavedFeedback(sound.feedback_types || []);
-    if (feedback) {
-      item.append(feedback);
+    const body = document.createElement("div");
+    body.className = "saved-folder-body";
+    for (const sound of folderSounds) {
+      body.append(renderSavedItem(sound));
     }
-    savedEl.append(item);
+    folder.append(body);
+    savedEl.append(folder);
   }
+}
+
+function savedFolderGroups(sounds) {
+  const groups = new Map();
+  for (const sound of sounds) {
+    const folderName = (sound.folder || "").trim() || "미분류";
+    if (!groups.has(folderName)) {
+      groups.set(folderName, []);
+    }
+    groups.get(folderName).push(sound);
+  }
+  return Array.from(groups.entries()).sort(([leftName], [rightName]) => {
+    if (leftName === "미분류") {
+      return 1;
+    }
+    if (rightName === "미분류") {
+      return -1;
+    }
+    return leftName.localeCompare(rightName, "ko");
+  });
+}
+
+function savedFolderKey(folderName) {
+  return `folder:${folderName || "미분류"}`;
+}
+
+function renderSavedItem(sound) {
+  const item = document.createElement("article");
+  item.className = "saved-item";
+  item.dataset.savedId = String(sound.saved_id);
+
+  const header = document.createElement("div");
+  header.className = "saved-item-head";
+  const title = document.createElement("strong");
+  title.textContent = sound.name;
+  const ratingBadge = document.createElement("span");
+  ratingBadge.className = sound.fit_rating ? "saved-rating is-rated" : "saved-rating";
+  ratingBadge.textContent = sound.fit_rating ? `적합도 ${sound.fit_rating}/5` : "미평가";
+  header.append(title, ratingBadge);
+
+  const meta = document.createElement("span");
+  meta.className = "saved-meta";
+  meta.textContent =
+    `${sourceLabel(sound.source_provider)} · ${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
+
+  item.append(header, meta);
+
+  if (sound.preview_url) {
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "none";
+    audio.src = sound.preview_url;
+    item.append(audio);
+  }
+
+  const feedback = renderSavedFeedback(sound.feedback_types || []);
+  if (feedback) {
+    item.append(feedback);
+  }
+
+  const labels = renderSavedLabels(sound.labels || []);
+  if (labels) {
+    item.append(labels);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "saved-item-actions";
+  const downloadButton = document.createElement("button");
+  downloadButton.type = "button";
+  downloadButton.textContent = "다운로드";
+  if (!sound.download_allowed || !(sound.download_url || sound.preview_url)) {
+    downloadButton.disabled = true;
+    downloadButton.textContent = "다운로드 없음";
+  } else {
+    downloadButton.addEventListener("click", () => triggerDownload(sound));
+  }
+  actions.append(downloadButton);
+
+  const openUrl = originalSoundUrl(sound);
+  if (openUrl) {
+    const openLink = document.createElement("a");
+    openLink.href = openUrl;
+    openLink.target = "_blank";
+    openLink.rel = "noreferrer";
+    openLink.textContent = "원본";
+    actions.append(openLink);
+  }
+
+  const deleteButton = document.createElement("button");
+  deleteButton.type = "button";
+  deleteButton.className = "danger-button";
+  deleteButton.textContent = "삭제";
+  deleteButton.addEventListener("click", async () => {
+    try {
+      await deleteSavedSound(sound.saved_id);
+      savedSounds = savedSounds.filter((itemSound) => itemSound.saved_id !== sound.saved_id);
+      renderSaved();
+      syncRenderedSaveStates();
+      setStatus(`저장 후보 삭제: ${sound.name}`);
+    } catch (error) {
+      setStatus(`삭제 실패: ${translateError(error.message)}`);
+    }
+  });
+  actions.append(deleteButton);
+  item.append(actions);
+
+  item.append(renderSavedEditor(sound));
+  return item;
+}
+
+function renderSavedLabels(labels) {
+  const cleaned = (labels || []).filter(Boolean);
+  if (cleaned.length === 0) {
+    return null;
+  }
+  const container = document.createElement("div");
+  container.className = "saved-labels";
+  for (const label of cleaned.slice(0, 8)) {
+    const pill = document.createElement("span");
+    pill.textContent = label;
+    container.append(pill);
+  }
+  return container;
+}
+
+function renderSavedEditor(sound) {
+  const editor = document.createElement("div");
+  editor.className = "saved-editor";
+
+  const ratingLabel = document.createElement("label");
+  ratingLabel.textContent = "적합도";
+  const rating = document.createElement("select");
+  rating.className = "saved-rating-select";
+  const emptyRating = document.createElement("option");
+  emptyRating.value = "";
+  emptyRating.textContent = "미평가";
+  rating.append(emptyRating);
+  for (let value = 5; value >= 1; value -= 1) {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = `${value}점`;
+    option.selected = sound.fit_rating === value;
+    rating.append(option);
+  }
+  rating.addEventListener("change", () => {
+    updateSavedMetadata(sound.saved_id, {
+      fit_rating: rating.value ? Number.parseInt(rating.value, 10) : null,
+    });
+  });
+  ratingLabel.append(rating);
+
+  const folderLabel = document.createElement("label");
+  folderLabel.textContent = "폴더";
+  const folder = document.createElement("input");
+  folder.type = "text";
+  folder.value = sound.folder || "";
+  folder.placeholder = "예: UI, 전투, 마법";
+  folder.addEventListener("change", () => {
+    updateSavedMetadata(sound.saved_id, { folder: folder.value.trim() });
+  });
+  folderLabel.append(folder);
+
+  const labelsLabel = document.createElement("label");
+  labelsLabel.textContent = "라벨";
+  const labels = document.createElement("input");
+  labels.type = "text";
+  labels.value = (sound.labels || []).join(", ");
+  labels.placeholder = "쉼표로 구분";
+  labels.addEventListener("change", () => {
+    updateSavedMetadata(sound.saved_id, { labels: parseLabelInput(labels.value) });
+  });
+  labelsLabel.append(labels);
+
+  const noteLabel = document.createElement("label");
+  noteLabel.className = "saved-note-field";
+  noteLabel.textContent = "메모";
+  const note = document.createElement("textarea");
+  note.value = sound.note || "";
+  note.placeholder = "사용할 장면, 컷 위치, 수정 필요점";
+  note.rows = 3;
+  note.addEventListener("change", () => {
+    updateSavedMetadata(sound.saved_id, { note: note.value });
+  });
+  noteLabel.append(note);
+
+  editor.append(ratingLabel, folderLabel, labelsLabel, noteLabel);
+  return editor;
+}
+
+function parseLabelInput(value) {
+  const seen = new Set();
+  const labels = [];
+  for (const raw of value.split(",")) {
+    const label = raw.trim();
+    const key = label.toLowerCase();
+    if (!label || seen.has(key)) {
+      continue;
+    }
+    labels.push(label);
+    seen.add(key);
+    if (labels.length === 20) {
+      break;
+    }
+  }
+  return labels;
 }
 
 function renderSavedFeedback(feedbackTypes) {
@@ -895,7 +1213,7 @@ async function searchSounds(event) {
     return;
   }
 
-  setStatus("Freesound에서 후보를 찾는 중입니다...");
+  setStatus("선택한 출처에서 후보를 찾는 중입니다...");
   resultsEl.replaceChildren();
 
   try {
@@ -922,6 +1240,27 @@ async function saveSound(sound) {
   return apiFetch("/api/saved-sounds", {
     method: "POST",
     body: JSON.stringify(sound),
+  });
+}
+
+async function updateSavedMetadata(savedId, update) {
+  try {
+    const saved = await apiFetch(`/api/saved-sounds/${savedId}`, {
+      method: "PATCH",
+      body: JSON.stringify(update),
+    });
+    replaceSavedSound(saved);
+    renderSaved();
+    syncRenderedSaveStates();
+    setStatus(`저장 후보 수정: ${saved.name}`);
+  } catch (error) {
+    setStatus(`저장 후보 수정 실패: ${translateError(error.message)}`);
+  }
+}
+
+async function deleteSavedSound(savedId) {
+  return apiFetch(`/api/saved-sounds/${savedId}`, {
+    method: "DELETE",
   });
 }
 
@@ -1214,6 +1553,7 @@ async function loadSavedSounds() {
   try {
     savedSounds = await apiFetch("/api/saved-sounds");
     renderSaved();
+    syncRenderedSaveStates();
   } catch (error) {
     setStatus(`저장 목록을 불러오지 못했습니다: ${translateError(error.message)}`);
   }
