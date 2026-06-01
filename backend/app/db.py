@@ -73,6 +73,7 @@ def initialize_db(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database_path) as connection:
         connection.executescript(SCHEMA)
+        _ensure_analysis_duration_column(connection)
         _ensure_saved_source_columns(connection)
         _ensure_feedback_source_columns(connection)
         connection.commit()

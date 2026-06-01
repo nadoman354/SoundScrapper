@@ -31,6 +31,8 @@ from backend.app.schemas import (
     FeedbackRequest,
     FeedbackResponse,
     PreviewCacheResponse,
+    ProviderStatus,
+    ProviderStatusResponse,
     SavedSound,
     SearchRequest,
     SearchResponse,
@@ -64,6 +66,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    @app.get("/api/provider-status", response_model=ProviderStatusResponse)
+    def provider_status(fastapi_request: Request) -> ProviderStatusResponse:
+        request_settings: Settings = fastapi_request.app.state.settings
+        openverse_has_credentials = bool(
+            request_settings.openverse_client_id
+            and request_settings.openverse_client_secret
+        )
+        return ProviderStatusResponse(
+            providers=[
+                ProviderStatus(
+                    provider="freesound",
+                    configured=bool(request_settings.freesound_api_key),
+                    enabled=bool(request_settings.freesound_api_key),
+                    message="키 인식됨"
+                    if request_settings.freesound_api_key
+                    else "FREESOUND_API_KEY 없음",
+                    base_url=request_settings.freesound_base_url,
+                ),
+                ProviderStatus(
+                    provider="jamendo",
+                    configured=bool(request_settings.jamendo_client_id),
+                    enabled=bool(request_settings.jamendo_client_id),
+                    message="CLIENT_ID 인식됨"
+                    if request_settings.jamendo_client_id
+                    else "JAMENDO_CLIENT_ID 없음",
+                    base_url=request_settings.jamendo_base_url,
+                ),
+                ProviderStatus(
+                    provider="openverse",
+                    configured=openverse_has_credentials,
+                    enabled=True,
+                    message="Client credentials 인식됨"
+                    if openverse_has_credentials
+                    else "인증 정보 없음: 익명 요청 시도",
+                    base_url=request_settings.openverse_base_url,
+                ),
+            ]
+        )
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:

@@ -3,6 +3,7 @@ const statusEl = document.querySelector("#status");
 const conditionWarningEl = document.querySelector("#condition-warning");
 const resultsEl = document.querySelector("#results");
 const savedEl = document.querySelector("#saved");
+const providerStatusEl = document.querySelector("#provider-status");
 const refreshSavedButton = document.querySelector("#refresh-saved");
 const savedFilterInput = document.querySelector("#saved-filter");
 const savedSortSelect = document.querySelector("#saved-sort");
@@ -1217,6 +1218,26 @@ async function loadSavedSounds() {
   }
 }
 
+async function loadProviderStatus() {
+  try {
+    const data = await apiFetch("/api/provider-status");
+    renderProviderStatus(data.providers || []);
+  } catch (error) {
+    providerStatusEl.textContent = `API 상태 확인 실패: ${translateError(error.message)}`;
+  }
+}
+
+function renderProviderStatus(providers) {
+  providerStatusEl.replaceChildren();
+  for (const provider of providers) {
+    const item = document.createElement("span");
+    item.className = provider.enabled ? "provider-ok" : "provider-missing";
+    item.title = provider.message || "";
+    item.textContent = `${sourceLabel(provider.provider)} ${provider.configured ? "연결" : "미설정"}`;
+    providerStatusEl.append(item);
+  }
+}
+
 form.addEventListener("submit", searchSounds);
 refreshSavedButton.addEventListener("click", loadSavedSounds);
 savedFilterInput.addEventListener("input", () => renderSaved());
@@ -1226,4 +1247,5 @@ savedGoodInput.addEventListener("change", () => renderSaved());
 favoriteSearchButton.addEventListener("click", toggleFavoriteSearch);
 setupSearchModeConflicts();
 renderSearchMemory();
+loadProviderStatus();
 loadSavedSounds();

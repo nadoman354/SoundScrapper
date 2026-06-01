@@ -39,18 +39,20 @@ SOUNDSCRAPPER_DB_PATH=sound_scout.db
 SOUNDSCRAPPER_PREVIEW_CACHE_DIR=.cache/previews
 FREESOUND_BASE_URL=https://freesound.org
 JAMENDO_BASE_URL=https://api.jamendo.com/v3.0
-OPENVERSE_BASE_URL=https://api.openverse.org/v1
+OPENVERSE_BASE_URL=https://api.openverse.org
 ```
 
 Openverse can run without credentials when anonymous API access is available.
 Freesound and Jamendo are skipped with a UI warning when their keys are missing.
+If `OPENVERSE_BASE_URL` includes `/v1`, the app normalizes it automatically,
+but `https://api.openverse.org` is the recommended value.
 Jamendo is best treated as a non-commercial/educational integration unless you
 have confirmed your usage terms with Jamendo.
 
 4. Run the server.
 
 ```powershell
-uvicorn backend.app.main:app --reload
+.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
 ```
 
 5. Open the local app.

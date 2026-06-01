@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 from fastapi.testclient import TestClient
 
-from backend.app.config import Settings
+from backend.app.config import Settings, _normalize_openverse_base_url
 from backend.app.db import (
     feedback_adjustment,
     get_analysis,
@@ -293,6 +293,48 @@ def test_api_health_and_saved_sounds(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert client.get("/api/saved-sounds").json()[0]["id"] == 20
+
+
+def test_provider_status_reports_config_without_exposing_secrets(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key="free-secret-value",
+        database_path=tmp_path / "provider-status.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+        openverse_client_id="openverse-client-id",
+        openverse_client_secret="openverse-secret-value",
+        openverse_base_url="https://api.openverse.org",
+        jamendo_client_id="jamendo-client-id",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get("/api/provider-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    providers = {item["provider"]: item for item in body["providers"]}
+    assert providers["freesound"]["configured"] is True
+    assert providers["jamendo"]["configured"] is True
+    assert providers["openverse"]["configured"] is True
+    assert providers["openverse"]["base_url"] == "https://api.openverse.org"
+    assert "free-secret-value" not in response.text
+    assert "openverse-secret-value" not in response.text
+
+
+def test_openverse_base_url_normalizes_v1_suffix() -> None:
+    assert (
+        _normalize_openverse_base_url("https://api.openverse.org/v1")
+        == "https://api.openverse.org"
+    )
+    assert (
+        _normalize_openverse_base_url("https://api.openverse.org/v1/")
+        == "https://api.openverse.org"
+    )
+    assert (
+        _normalize_openverse_base_url("https://api.openverse.org/")
+        == "https://api.openverse.org"
+    )
 
 
 def test_download_preview_returns_attachment(tmp_path: Path, monkeypatch) -> None:
@@ -772,6 +814,41 @@ def test_feedback_uses_cached_analysis_for_future_searches(tmp_path: Path) -> No
     result = SoundSearchResult(id=2, name="New Impact", tags=["impact"])
 
     assert feedback_adjustment(database_path, result, analysis=candidate_analysis) > 0
+
+
+def test_existing_analysis_table_is_migrated_before_feedback_lookup(tmp_path: Path) -> None:
+    database_path = tmp_path / "old-analysis-schema.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE sound_analyses (
+                freesound_id INTEGER PRIMARY KEY,
+                preview_url TEXT NOT NULL,
+                waveform TEXT NOT NULL DEFAULT '[]',
+                rms REAL NOT NULL DEFAULT 0,
+                peak REAL NOT NULL DEFAULT 0,
+                leading_silence_seconds REAL NOT NULL DEFAULT 0,
+                low_ratio REAL NOT NULL DEFAULT 0,
+                mid_ratio REAL NOT NULL DEFAULT 0,
+                high_ratio REAL NOT NULL DEFAULT 0,
+                spectral_centroid_hz REAL NOT NULL DEFAULT 0,
+                heaviness_score INTEGER NOT NULL DEFAULT 0,
+                sharpness_score INTEGER NOT NULL DEFAULT 0,
+                emptiness_score INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    adjustment = feedback_adjustment(database_path, SoundSearchResult(id=1, name="Test"))
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(sound_analyses)").fetchall()
+        }
+    assert adjustment == 0
+    assert "duration" in columns
 
 
 def test_preview_cache_rejects_non_freesound_url(tmp_path: Path) -> None:

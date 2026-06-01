@@ -39,6 +39,18 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class ProviderStatus(BaseModel):
+    provider: str
+    configured: bool
+    enabled: bool
+    message: str = ""
+    base_url: str | None = None
+
+
+class ProviderStatusResponse(BaseModel):
+    providers: list[ProviderStatus]
+
+
 class SearchRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=500)
     license: LicenseFilter = "commercial"
