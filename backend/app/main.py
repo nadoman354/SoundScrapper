@@ -506,7 +506,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return FileResponse(path, media_type=media_type_for_path(path))
 
-@app.get("/api/download-preview/{sound_id}")
+    @app.get("/api/download-preview/{sound_id}")
     async def download_preview_audio(
         sound_id: int,
         preview_url: str,

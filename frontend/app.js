@@ -1044,7 +1044,9 @@ function renderSoundCard(sound) {
   }
 
   syncBadReasonVisibility(node);
-  hydrateStoredAnalysis(sound, node);
+  if (!isHelpDemoActive()) {
+    hydrateStoredAnalysis(sound, node);
+  }
 
   return node;
 }
@@ -1495,6 +1497,82 @@ function renderResults(results) {
   }
 }
 
+function isHelpDemoActive() {
+  return Boolean(helpDemoSnapshot);
+}
+
+function enterHelpDemo() {
+  if (helpDemoSnapshot) {
+    return;
+  }
+  helpDemoSnapshot = {
+    lastResults: cloneData(lastResults),
+    savedSounds: cloneData(savedSounds),
+    savedFolders: cloneData(savedFolders),
+    status: statusEl.textContent,
+    savedFilter: savedFilterInput.value,
+    savedSort: savedSortSelect.value,
+    savedCc0: savedCc0Input.checked,
+    savedGood: savedGoodInput.checked,
+    panelCollapsed: workspaceLayout.classList.contains("is-saved-panel-collapsed"),
+  };
+
+  document.body.classList.add("is-help-demo");
+  savedFilterInput.value = "";
+  savedSortSelect.value = "recent";
+  savedCc0Input.checked = false;
+  savedGoodInput.checked = false;
+  lastResults = cloneData(HELP_DEMO_RESULTS);
+  savedFolders = cloneData(HELP_DEMO_FOLDERS);
+  savedSounds = cloneData(HELP_DEMO_SAVED);
+  applySavedPanelCollapsed(false);
+  renderResults(lastResults);
+  renderHelpDemoAnalyses();
+  renderSaved();
+  syncRenderedSaveStates();
+  setStatus("도움말 데모 화면입니다. 종료하면 원래 화면으로 돌아갑니다.");
+}
+
+function exitHelpDemo() {
+  if (!helpDemoSnapshot) {
+    return;
+  }
+  const snapshot = helpDemoSnapshot;
+  helpDemoSnapshot = null;
+  document.body.classList.remove("is-help-demo");
+  lastResults = cloneData(snapshot.lastResults);
+  savedSounds = cloneData(snapshot.savedSounds);
+  savedFolders = cloneData(snapshot.savedFolders);
+  savedFilterInput.value = snapshot.savedFilter;
+  savedSortSelect.value = snapshot.savedSort;
+  savedCc0Input.checked = snapshot.savedCc0;
+  savedGoodInput.checked = snapshot.savedGood;
+  applySavedPanelCollapsed(snapshot.panelCollapsed);
+  renderResults(lastResults);
+  renderSaved();
+  syncRenderedSaveStates();
+  setStatus(snapshot.status || "도움말을 종료했습니다.");
+}
+
+function renderHelpDemoAnalyses() {
+  for (const sound of HELP_DEMO_RESULTS) {
+    const analysis = HELP_DEMO_ANALYSES[sound.id];
+    const context = cardContexts.get(sound.id);
+    if (!analysis || !context) {
+      continue;
+    }
+    waveformCache.set(sound.id, analysis);
+    context.analysis = analysis;
+    context.waveformRendered = false;
+    applyAnalysisToCard(sound, context.node, analysis, { cached: true });
+    renderWaveformForCard(context);
+  }
+}
+
+function cloneData(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 async function autoAnalyzeTopResults() {
   if (!checkboxValue("#auto-analyze")) {
     return;
@@ -1733,6 +1811,10 @@ function setupFolderDropZone(folderNode, folderName) {
   folderNode.addEventListener("drop", async (event) => {
     event.preventDefault();
     folderNode.classList.remove("is-drop-target");
+    if (isHelpDemoActive()) {
+      setStatus("도움말 데모에서는 폴더 이동을 저장하지 않습니다.");
+      return;
+    }
     const savedId = Number.parseInt(event.dataTransfer.getData("text/plain"), 10);
     if (!Number.isFinite(savedId)) {
       return;
@@ -2116,6 +2198,10 @@ async function deleteSavedItem(sound) {
 }
 
 async function createSavedFolder(name) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 폴더를 만들지 않습니다.");
+    return null;
+  }
   return apiFetch("/api/saved-folders", {
     method: "POST",
     body: JSON.stringify({ name }),
@@ -2123,6 +2209,10 @@ async function createSavedFolder(name) {
 }
 
 async function renameSavedFolder(folderId, name) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 폴더 이름을 변경하지 않습니다.");
+    return null;
+  }
   return apiFetch(`/api/saved-folders/${folderId}`, {
     method: "PATCH",
     body: JSON.stringify({ name }),
@@ -2130,6 +2220,10 @@ async function renameSavedFolder(folderId, name) {
 }
 
 async function deleteSavedFolder(folderId) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 폴더를 삭제하지 않습니다.");
+    return null;
+  }
   return apiFetch(`/api/saved-folders/${folderId}`, {
     method: "DELETE",
   });
@@ -2165,6 +2259,10 @@ async function triggerFolderDownload(group, options = {}) {
 }
 
 async function renameSavedFolderPrompt(group) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 폴더 이름을 변경하지 않습니다.");
+    return;
+  }
   const nextName = window.prompt("새 폴더명", group.label);
   if (nextName === null) {
     return;
@@ -2183,6 +2281,10 @@ async function renameSavedFolderPrompt(group) {
 }
 
 async function deleteSavedFolderPrompt(group) {
+  if (isHelpDemoActive()) {
+    setStatus("도움말 데모에서는 폴더를 삭제하지 않습니다.");
+    return;
+  }
   if (!window.confirm(`"${group.label}" 폴더만 삭제하고 안의 사운드는 미분류로 이동할까요?`)) {
     return;
   }
@@ -2203,6 +2305,9 @@ async function saveAnalysis(analysis) {
 }
 
 async function sendFeedback(sound, feedbackType, active) {
+  if (isHelpDemoActive()) {
+    return { id: sound.id, freesound_id: sound.id, feedback_type: feedbackType, active };
+  }
   return apiFetch("/api/feedback", {
     method: "POST",
     body: JSON.stringify({
@@ -2534,6 +2639,7 @@ function clampNumber(value, min, max) {
 
 function startHelpTour() {
   hideTooltip();
+  enterHelpDemo();
   helpTourIndex = 0;
   helpTourOverlay.hidden = false;
   helpTourPopover.hidden = false;
@@ -2546,6 +2652,7 @@ function closeHelpTour() {
   helpTourOverlay.hidden = true;
   helpTourPopover.hidden = true;
   document.body.classList.remove("is-help-tour-active");
+  exitHelpDemo();
 }
 
 function clearHelpHighlight() {
@@ -2761,6 +2868,27 @@ function initializeTooltips() {
   });
 }
 
+function initializeDownloadChoiceModal() {
+  if (!downloadChoiceModal) {
+    return;
+  }
+  downloadChoiceLoginButton.addEventListener("click", async () => {
+    closeDownloadChoiceModal();
+    await startFreesoundLogin();
+  });
+  downloadChoicePreviewButton.addEventListener("click", () => {
+    confirmPreviewDownloadChoice().catch((error) => {
+      setStatus(`프리뷰 다운로드 실패: ${translateError(error.message)}`);
+    });
+  });
+  downloadChoiceCancelButton.addEventListener("click", closeDownloadChoiceModal);
+  downloadChoiceModal.addEventListener("click", (event) => {
+    if (event.target === downloadChoiceModal) {
+      closeDownloadChoiceModal();
+    }
+  });
+}
+
 form.addEventListener("submit", searchSounds);
 refreshSavedButton.addEventListener("click", loadSavedSounds);
 savedPanelToggle.addEventListener("click", () => {
@@ -2780,7 +2908,10 @@ createFolderButton.addEventListener("click", async () => {
     return;
   }
   try {
-    await createSavedFolder(name);
+    const folder = await createSavedFolder(name);
+    if (!folder) {
+      return;
+    }
     newFolderInput.value = "";
     await loadSavedFolders();
     setStatus(`폴더 생성: ${name}`);
@@ -2795,9 +2926,12 @@ newFolderInput.addEventListener("keydown", (event) => {
   }
 });
 setupSearchModeConflicts();
+handleFreesoundLoginRedirect();
 initializeHelpTour();
 initializeTooltips();
+initializeDownloadChoiceModal();
 applySavedPanelCollapsed(readSavedPanelCollapsed());
 renderSearchMemory();
 loadProviderStatus();
+loadFreesoundAuthStatus();
 loadSavedSounds();

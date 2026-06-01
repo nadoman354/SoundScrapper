@@ -395,6 +395,17 @@ select {
   color: #9a3412;
 }
 
+.provider-status button {
+  min-height: 28px;
+  border: 1px solid #9fd3cc;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f766e;
+  font-size: 0.75rem;
+  font-weight: 900;
+  padding: 0 9px;
+}
+
 .workspace-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(340px, 30vw, 420px);

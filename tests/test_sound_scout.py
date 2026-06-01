@@ -11,22 +11,26 @@ from fastapi.testclient import TestClient
 
 from backend.app.config import Settings, _normalize_openverse_base_url
 from backend.app.db import (
+    FreesoundOAuthToken,
     create_saved_folder,
     delete_saved_folder,
     delete_saved_sound,
     feedback_adjustment,
     get_analysis,
+    get_freesound_oauth_token,
     list_saved_folders,
     list_saved_sounds,
     rename_saved_folder,
     save_analysis,
     save_feedback,
+    save_freesound_oauth_token,
     save_sound,
     update_saved_sound,
 )
 from backend.app.freesound_client import FreesoundClient, build_filter
+from backend.app.freesound_oauth import FreesoundOriginalDownload, FreesoundTokenPayload
 from backend.app.jamendo_client import JamendoClient
-from backend.app.main import _dedupe_results, create_app
+from backend.app.main import _dedupe_results, _make_freesound_oauth_state, create_app
 from backend.app.openverse_client import OpenverseClient
 from backend.app.prompt_parser import parse_prompt
 from backend.app.preview_cache import cache_preview_audio, is_allowed_preview_url
@@ -579,6 +583,231 @@ def test_provider_status_reports_config_without_exposing_secrets(tmp_path: Path)
     assert "openverse-secret-value" not in response.text
 
 
+def test_freesound_auth_status_and_logout_are_workspace_scoped(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-auth.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    save_freesound_oauth_token(
+        settings.database_path,
+        FreesoundOAuthToken(
+            workspace_id="owner",
+            access_token="owner-access",
+            refresh_token="owner-refresh",
+            expires_at=4_000_000_000,
+            username="owner-user",
+        ),
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    owner = client.get(
+        "/api/freesound/auth-status",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+    )
+    guest = client.get(
+        "/api/freesound/auth-status",
+        headers={"X-SoundScrapper-Workspace": "guest"},
+    )
+
+    assert owner.status_code == 200
+    assert owner.json()["logged_in"] is True
+    assert owner.json()["username"] == "owner-user"
+    assert guest.json()["logged_in"] is False
+
+    assert client.post(
+        "/api/freesound/logout",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+    ).status_code == 204
+    assert get_freesound_oauth_token(settings.database_path, workspace_id="owner") is None
+
+
+def test_freesound_oauth_start_uses_signed_workspace_state(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-start.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/freesound/oauth/start",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+    )
+
+    assert response.status_code == 200
+    authorize_url = response.json()["authorize_url"]
+    assert "client_id=client-id" in authorize_url
+    assert "response_type=code" in authorize_url
+    assert "state=" in authorize_url
+
+
+def test_freesound_oauth_exchange_saves_token(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-exchange.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+
+    async def fake_exchange(settings_arg: Settings, code: str) -> FreesoundTokenPayload:
+        assert settings_arg == settings
+        assert code == "oauth-code"
+        return FreesoundTokenPayload(
+            access_token="access",
+            refresh_token="refresh",
+            expires_at=4_000_000_000,
+        )
+
+    async def fake_me(settings_arg: Settings, access_token: str) -> dict:
+        assert settings_arg == settings
+        assert access_token == "access"
+        return {"username": "oauth-user"}
+
+    monkeypatch.setattr("backend.app.main.exchange_authorization_code", fake_exchange)
+    monkeypatch.setattr("backend.app.main.fetch_freesound_me", fake_me)
+
+    app = create_app(settings)
+    client = TestClient(app)
+    response = client.post(
+        "/api/freesound/oauth/exchange",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+        json={"code": "oauth-code"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["logged_in"] is True
+    token = get_freesound_oauth_token(settings.database_path, workspace_id="owner")
+    assert token is not None
+    assert token.access_token == "access"
+    assert token.username == "oauth-user"
+
+
+def test_freesound_oauth_callback_stores_state_workspace(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-callback.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+
+    async def fake_exchange(settings_arg: Settings, code: str) -> FreesoundTokenPayload:
+        assert settings_arg == settings
+        assert code == "callback-code"
+        return FreesoundTokenPayload(
+            access_token="callback-access",
+            refresh_token="callback-refresh",
+            expires_at=4_000_000_000,
+        )
+
+    async def fake_me(settings_arg: Settings, access_token: str) -> dict:
+        assert access_token == "callback-access"
+        return {"username": "callback-user"}
+
+    monkeypatch.setattr("backend.app.main.exchange_authorization_code", fake_exchange)
+    monkeypatch.setattr("backend.app.main.fetch_freesound_me", fake_me)
+
+    app = create_app(settings)
+    client = TestClient(app)
+    state = _make_freesound_oauth_state(settings, "owner")
+    response = client.get(
+        "/api/freesound/oauth/callback",
+        params={"code": "callback-code", "state": state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in {302, 307}
+    assert response.headers["location"] == "/?freesound_login=success"
+    token = get_freesound_oauth_token(settings.database_path, workspace_id="owner")
+    assert token is not None
+    assert token.access_token == "callback-access"
+
+
+def test_freesound_original_download_requires_login(tmp_path: Path) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-original-missing.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/freesound/original-download/123",
+        params={"workspace_id": "owner", "name": "Slash.wav"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_freesound_original_download_returns_attachment(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "freesound-original.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    save_freesound_oauth_token(
+        settings.database_path,
+        FreesoundOAuthToken(
+            workspace_id="owner",
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_at=4_000_000_000,
+            username="owner-user",
+        ),
+    )
+    original_path = tmp_path / "original.wav"
+    original_path.write_bytes(b"original-audio")
+
+    async def fake_download(
+        settings_arg: Settings,
+        source_id: str,
+        access_token: str,
+        name: str,
+    ) -> FreesoundOriginalDownload:
+        assert settings_arg == settings
+        assert source_id == "123"
+        assert access_token == "access-token"
+        assert name == "Slash.wav"
+        return FreesoundOriginalDownload(
+            path=original_path,
+            filename="Slash.wav",
+            media_type="audio/wav",
+        )
+
+    monkeypatch.setattr("backend.app.main.download_freesound_original", fake_download)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/freesound/original-download/123",
+        params={"workspace_id": "owner", "name": "Slash.wav"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"original-audio"
+    assert "attachment" in response.headers["content-disposition"]
+    assert "Slash.wav" in response.headers["content-disposition"]
+
+
 def test_openverse_base_url_normalizes_v1_suffix() -> None:
     assert (
         _normalize_openverse_base_url("https://api.openverse.org/v1")
@@ -697,6 +926,83 @@ def test_saved_folder_download_returns_zip_with_ordered_names(
     assert archive.namelist() == ["UI_1.mp3", "UI_2.mp3"]
     assert archive.read("UI_1.mp3") == b"audio-52"
     assert archive.read("UI_2.mp3") == b"audio-51"
+
+
+def test_saved_folder_download_uses_freesound_original_when_logged_in(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        freesound_api_key=None,
+        freesound_client_id="client-id",
+        freesound_client_secret="client-secret",
+        database_path=tmp_path / "folder-original-download.db",
+        frontend_dir=Path("frontend"),
+        preview_cache_dir=tmp_path / "previews",
+    )
+    save_freesound_oauth_token(
+        settings.database_path,
+        FreesoundOAuthToken(
+            workspace_id="owner",
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_at=4_000_000_000,
+            username="owner-user",
+        ),
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    folder = client.post(
+        "/api/saved-folders",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+        json={"name": "UI"},
+    ).json()
+    saved = client.post(
+        "/api/saved-sounds",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+        json={
+            "id": 61,
+            "name": "Original Sword",
+            "source_provider": "freesound",
+            "source_id": "61",
+            "preview_url": "https://cdn.freesound.org/previews/61.mp3",
+            "download_url": "https://cdn.freesound.org/previews/61.mp3",
+            "download_allowed": True,
+        },
+    ).json()
+    client.patch(
+        f"/api/saved-sounds/{saved['saved_id']}",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+        json={"folder": "UI"},
+    )
+    original_path = tmp_path / "original-sword.wav"
+    original_path.write_bytes(b"original-folder-audio")
+
+    async def fake_download(
+        settings_arg: Settings,
+        source_id: str,
+        access_token: str,
+        name: str,
+    ) -> FreesoundOriginalDownload:
+        assert source_id == "61"
+        assert access_token == "access-token"
+        return FreesoundOriginalDownload(
+            path=original_path,
+            filename="Original Sword.wav",
+            media_type="audio/wav",
+        )
+
+    monkeypatch.setattr("backend.app.main.download_freesound_original", fake_download)
+
+    response = client.get(
+        f"/api/saved-folders/{folder['folder_id']}/download",
+        headers={"X-SoundScrapper-Workspace": "owner"},
+    )
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert archive.namelist() == ["UI_1.wav"]
+    assert archive.read("UI_1.wav") == b"original-folder-audio"
 
 
 def test_search_without_provider_key_returns_warning(tmp_path: Path) -> None:
