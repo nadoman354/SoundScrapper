@@ -1233,7 +1233,8 @@ function renderProviderStatus(providers) {
     const item = document.createElement("span");
     item.className = provider.enabled ? "provider-ok" : "provider-missing";
     item.title = provider.message || "";
-    item.textContent = `${sourceLabel(provider.provider)} ${provider.configured ? "연결" : "미설정"}`;
+    const statusLabel = provider.enabled ? (provider.configured ? "연결" : "익명") : "미설정";
+    item.textContent = `${sourceLabel(provider.provider)} ${statusLabel}`;
     providerStatusEl.append(item);
   }
 }
