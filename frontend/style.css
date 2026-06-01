@@ -420,13 +420,16 @@ select {
 .saved-panel-body {
   grid-column: 2;
   grid-row: 1;
+  box-sizing: border-box;
   display: grid;
   align-content: start;
   gap: 0;
   height: 100%;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 3px;
+  padding-right: 12px;
+  scrollbar-gutter: stable;
 }
 
 .saved-panel-rail {
@@ -466,7 +469,7 @@ select {
 
 .workspace-layout.is-saved-panel-collapsed .saved-panel {
   grid-template-columns: 44px;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
@@ -479,12 +482,13 @@ select {
 
 .workspace-layout.is-saved-panel-collapsed .saved-panel-rail {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 3;
+  align-self: start;
   display: grid;
   place-items: center;
-  align-content: center;
+  align-content: start;
   gap: 10px;
-  height: 100%;
+  height: auto;
   color: #0f766e;
   padding: 12px 0 18px;
 }
@@ -512,10 +516,10 @@ select {
 
 .workspace-layout.is-saved-panel-collapsed .saved-panel-toggle {
   grid-column: 1;
-  grid-row: 1;
-  align-self: start;
+  grid-row: 2;
+  align-self: center;
   justify-self: center;
-  margin-top: 8px;
+  margin-top: 0;
   border-radius: 6px;
 }
 
@@ -1122,6 +1126,7 @@ audio {
   display: grid;
   gap: 12px;
   min-height: 0;
+  min-width: 0;
   max-height: none;
   overflow: visible;
   padding-right: 0;
@@ -1132,10 +1137,12 @@ audio {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 7px;
   margin-bottom: 8px;
+  min-width: 0;
 }
 
 .folder-create input,
 .folder-create button {
+  max-width: 100%;
   min-height: 36px;
 }
 
@@ -1147,10 +1154,12 @@ audio {
   display: grid;
   gap: 8px;
   margin-bottom: 10px;
+  min-width: 0;
 }
 
 .saved-controls input,
 .saved-controls select {
+  max-width: 100%;
   min-height: 38px;
 }
 
@@ -1303,8 +1312,8 @@ audio {
 
 .saved-item-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: flex-start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
   min-width: 0;
 }
@@ -1312,7 +1321,6 @@ audio {
 .saved-title-block {
   display: grid;
   min-width: 0;
-  gap: 4px;
   overflow: hidden;
 }
 
@@ -1364,6 +1372,12 @@ audio {
 
 .saved-meta {
   color: var(--muted);
+}
+
+.saved-meta-row {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .saved-rating {
@@ -1538,6 +1552,10 @@ audio {
   color: #b91c1c;
 }
 
+.saved-audio-wrap {
+  min-width: 0;
+}
+
 .saved-audio-wrap audio {
   width: 100%;
   min-width: 0;
@@ -1546,9 +1564,11 @@ audio {
 .saved-rating-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
+  padding-top: 1px;
 }
 
 .saved-rating-row > span {
@@ -1559,6 +1579,7 @@ audio {
 
 .saved-rating-scale {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 3px;
 }
 
@@ -1647,9 +1668,26 @@ audio {
   position: absolute;
   right: 9px;
   bottom: 9px;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
   border-color: #9fd3cc;
+  border-radius: 999px;
   background: #ecfdf5;
   color: #0f766e;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.12);
+}
+
+.saved-mini-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+.saved-mini-play.is-playing {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
 }
 
 .saved-item.is-collapsed {
@@ -1666,6 +1704,10 @@ audio {
   min-height: 42px;
   margin-right: 40px;
   padding: 7px 8px;
+}
+
+.saved-item.is-collapsed .saved-rating-row {
+  margin-right: 40px;
 }
 
 .saved-item.is-collapsed .saved-mini-play {

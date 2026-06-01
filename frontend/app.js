@@ -1384,17 +1384,13 @@ function renderSavedItem(sound, defaultDownloadName) {
   titleText.textContent = sound.name;
   title.append(titleText);
   const meta = document.createElement("span");
-  meta.className = "saved-meta";
+  meta.className = "saved-meta saved-meta-row";
   meta.textContent =
     `${sourceLabel(sound.source_provider)} · ${sound.duration.toFixed(2)}초 · 점수 ${sound.score} · ${licenseLabel(sound.license)}`;
-  titleBlock.append(title, meta);
-  header.append(
-    titleBlock,
-    renderSavedRatingControl(sound, isCollapsed),
-    renderSavedItemActions(sound, defaultDownloadName, item)
-  );
+  titleBlock.append(title);
+  header.append(titleBlock, renderSavedItemActions(sound, defaultDownloadName, item));
 
-  item.append(handle, header);
+  item.append(handle, header, meta);
 
   const audioWrap = document.createElement("div");
   audioWrap.className = "saved-audio-wrap";
@@ -1408,12 +1404,12 @@ function renderSavedItem(sound, defaultDownloadName) {
   } else {
     audioWrap.append(emptyState("미리듣기 없음"));
   }
-  item.append(audioWrap, renderSavedNoteSummary(sound));
+  item.append(audioWrap, renderSavedRatingControl(sound, isCollapsed), renderSavedNoteSummary(sound));
 
   const editor = renderSavedEditor(sound, defaultDownloadName);
   item.append(editor);
 
-  const miniPlay = iconButton("간단 재생", "play", "saved-mini-play");
+  const miniPlay = iconButton("간단 재생", "play", "icon-button saved-mini-play");
   miniPlay.disabled = !audio;
   setupMiniPlayButton(miniPlay, audio);
   item.append(miniPlay);
