@@ -78,8 +78,22 @@ a {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
+}
+
+.help-tour-start {
+  min-height: 38px;
+  border: 1px solid #9fd3cc;
+  background: #ffffff;
+  color: var(--accent-strong);
+  padding: 0 12px;
+}
+
+.help-tour-start:hover {
+  background: #ecfdf5;
 }
 
 .toolbar {
@@ -1743,6 +1757,101 @@ audio {
 .site-footer a {
   min-height: 0;
   display: inline;
+}
+
+.help-tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.is-help-highlight {
+  position: relative;
+  z-index: 90;
+  border-radius: 8px;
+  outline: 3px solid #2dd4bf;
+  outline-offset: 4px;
+  box-shadow:
+    0 0 0 9999px rgba(15, 23, 42, 0.1),
+    0 18px 44px rgba(15, 23, 42, 0.22);
+}
+
+.help-tour-popover {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  width: min(380px, calc(100vw - 28px));
+  gap: 9px;
+  border: 1px solid #9fd3cc;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 22px 58px rgba(15, 23, 42, 0.24);
+  padding: 16px;
+}
+
+.help-tour-step {
+  color: #0f766e;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.help-tour-popover h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.help-tour-popover p {
+  margin: 0;
+  color: #475569;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.help-tour-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.help-tour-actions button {
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+#help-tour-prev,
+#help-tour-close {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: var(--accent-strong);
+}
+
+#help-tour-prev:hover,
+#help-tour-close:hover {
+  background: #f8fafc;
+}
+
+#help-tour-prev:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.help-tooltip {
+  position: fixed;
+  z-index: 120;
+  max-width: min(300px, calc(100vw - 20px));
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #102a28;
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.24);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.45;
+  padding: 8px 10px;
+  pointer-events: none;
 }
 
 @media (max-width: 980px) {

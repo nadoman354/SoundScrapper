@@ -18,6 +18,16 @@ const favoriteSearchButton = document.querySelector("#favorite-search");
 const recentSearchesEl = document.querySelector("#recent-searches");
 const favoriteSearchesEl = document.querySelector("#favorite-searches");
 const template = document.querySelector("#sound-card-template");
+const helpTourStartButton = document.querySelector("#help-tour-start");
+const helpTourOverlay = document.querySelector("#help-tour-overlay");
+const helpTourPopover = document.querySelector("#help-tour-popover");
+const helpTourStepEl = document.querySelector("#help-tour-step");
+const helpTourTitleEl = document.querySelector("#help-tour-title");
+const helpTourDescriptionEl = document.querySelector("#help-tour-description");
+const helpTourPrevButton = document.querySelector("#help-tour-prev");
+const helpTourNextButton = document.querySelector("#help-tour-next");
+const helpTourCloseButton = document.querySelector("#help-tour-close");
+const helpTooltip = document.querySelector("#help-tooltip");
 
 let lastResults = [];
 let savedSounds = [];
@@ -85,6 +95,75 @@ const SEARCH_MODE_CONFLICTS = {
   short_sfx: ["loop_bgm"],
   loop_bgm: ["short_sfx"],
 };
+
+const HELP_TOUR_STEPS = [
+  {
+    title: "검색 조건",
+    selector: ".toolbar",
+    description: "원하는 사운드를 자연어로 입력하고 라이선스, 출처, 길이 조건을 좁히는 영역입니다. 게임용 우선을 켜면 짧고 쓰기 쉬운 효과음 쪽으로 점수가 보정됩니다.",
+  },
+  {
+    title: "자주 쓰는 조건",
+    selector: ".condition-toggles",
+    description: "깨끗한 소스, 짧은 원샷, 컷오프 쉬움, 루프/BGM 후보처럼 자주 쓰는 검색 조건을 빠르게 켤 수 있습니다. 서로 맞지 않는 조건은 자동으로 해제되고 아래에 경고가 표시됩니다.",
+  },
+  {
+    title: "검색 결과 카드",
+    selector: ".sound-card",
+    fallbackSelector: ".results-panel",
+    fallbackDescription: "검색 결과가 없을 때는 이 영역에 카드가 표시됩니다. 검색 후 각 카드에서 제목, 출처, 길이, 라이선스, 점수, 태그와 분석 배지를 보고 후보를 고릅니다.",
+    description: "각 카드에서 제목, 출처, 길이, 라이선스, 점수, 태그와 분석 배지를 빠르게 확인합니다. 좋음/별로 평가는 이후 후보 판단과 개인화 점수 보정에 활용됩니다.",
+  },
+  {
+    title: "파형 분석",
+    selector: ".sound-card .waveform-panel:not([hidden])",
+    fallbackSelector: "#auto-analyze",
+    fallbackDescription: "분석된 카드가 없으면 이 옵션을 켠 뒤 검색해 보세요. 상위 5개 후보의 파형, 앞 무음, 음량, 컷오프 가능성을 자동으로 확인합니다.",
+    description: "분석된 카드에는 듣기 UI 위에 파형이 표시됩니다. 파형을 보고 빈 구간이나 앞 무음을 피하고, 필요한 위치를 클릭해 바로 들어볼 수 있습니다.",
+  },
+  {
+    title: "저장 버튼",
+    selector: ".sound-card [data-action='save']",
+    fallbackSelector: ".results-panel",
+    fallbackDescription: "검색 결과가 생기면 카드 우상단의 북마크 버튼으로 후보를 저장합니다. 저장된 후보는 다시 누르면 저장 목록에서 해제됩니다.",
+    description: "북마크 버튼으로 후보를 저장하거나 저장 해제합니다. 폴더가 있으면 저장할 폴더를 선택하는 메뉴가 열립니다.",
+  },
+  {
+    title: "저장 후보 패널",
+    selector: "#saved-panel",
+    expandSavedPanel: true,
+    description: "오른쪽 패널은 검색하면서 후보를 비교하는 작업대입니다. 접기 버튼으로 패널을 줄이면 검색 결과 영역을 더 넓게 볼 수 있습니다.",
+  },
+  {
+    title: "폴더 관리",
+    selector: ".saved-folder",
+    fallbackSelector: ".folder-create",
+    expandSavedPanel: true,
+    fallbackDescription: "폴더가 없으면 여기에서 새 폴더를 만듭니다. 폴더가 생기면 이름 변경, 삭제, 폴더 전체 다운로드를 사용할 수 있습니다.",
+    description: "저장 후보를 폴더로 정리하고 폴더 단위 ZIP 다운로드를 할 수 있습니다. 폴더 삭제는 사운드를 지우지 않고 미분류로 이동합니다.",
+  },
+  {
+    title: "저장 후보 카드",
+    selector: ".saved-item",
+    fallbackSelector: "#saved",
+    expandSavedPanel: true,
+    fallbackDescription: "저장한 후보가 없으면 이 영역이 비어 있습니다. 저장 후에는 다시 듣기, 적합도 평가, 메모, 다운로드명 설정을 할 수 있습니다.",
+    description: "저장한 사운드는 다시 듣기, 적합도 1~5 평가, 메모, 다운로드명 설정이 가능합니다. 최소화하면 핵심 정보와 간단 재생만 남겨 비교가 쉬워집니다.",
+  },
+  {
+    title: "다운로드와 라이선스",
+    selector: ".sound-card [data-action='download']",
+    fallbackSelector: ".site-footer",
+    fallbackDescription: "검색 결과가 없을 때는 하단의 출처/연락처 안내를 확인하세요. 실제 사용 전에는 원본 페이지에서 개별 음원의 라이선스를 다시 확인해야 합니다.",
+    description: "다운로드는 앱에서 접근 가능한 미리듣기 파일 기준입니다. 게임에 넣기 전에는 원본 보기를 눌러 저작자, 라이선스, 고음질 파일 여부를 확인하세요.",
+  },
+];
+
+let helpTourIndex = 0;
+let helpTourTarget = null;
+let tooltipTimer = null;
+let tooltipTarget = null;
+let tooltipRaf = null;
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -252,6 +331,7 @@ function applySavedPanelCollapsed(collapsed) {
   const label = collapsed ? "저장 후보 패널 펼치기" : "저장 후보 패널 접기";
   savedPanelToggle.setAttribute("aria-label", label);
   savedPanelToggle.title = label;
+  savedPanelToggle.dataset.tooltip = label;
 }
 
 function updateSavedPanelCount() {
@@ -411,6 +491,7 @@ function iconButton(label, icon, className = "icon-button") {
   button.className = className;
   button.title = label;
   button.setAttribute("aria-label", label);
+  button.dataset.tooltip = label;
   button.innerHTML = iconMarkup(icon);
   return button;
 }
@@ -423,6 +504,7 @@ function iconLink(label, icon, href) {
   link.rel = "noreferrer";
   link.title = label;
   link.setAttribute("aria-label", label);
+  link.dataset.tooltip = label;
   link.innerHTML = iconMarkup(icon);
   return link;
 }
@@ -552,6 +634,7 @@ function renderSoundCard(sound) {
   const sourceBadge = node.querySelector(".source-badge");
   sourceBadge.textContent = sourceLabel(sound.source_provider);
   sourceBadge.classList.add(`source-${sound.source_provider || "unknown"}`);
+  sourceBadge.dataset.tooltip = "검색된 사운드의 출처입니다.";
   node.querySelector("h3").textContent = sound.name;
   node.querySelector(".meta").textContent =
     `${sound.duration.toFixed(2)}초 · ${licenseLabel(sound.license)}`;
@@ -665,6 +748,9 @@ function renderSoundCard(sound) {
   }
 
   for (const button of node.querySelectorAll("[data-feedback]")) {
+    if (!button.dataset.tooltip) {
+      button.dataset.tooltip = "평가 이유를 남겨 이후 후보 판단에 활용합니다.";
+    }
     button.addEventListener("click", async () => {
       const feedbackType = button.dataset.feedback;
       const nextActive = button.getAttribute("aria-pressed") !== "true";
@@ -1365,6 +1451,7 @@ function renderSavedItem(sound, defaultDownloadName) {
   handle.className = "saved-drag-handle";
   handle.draggable = true;
   handle.title = "드래그해서 폴더 이동";
+  handle.dataset.tooltip = "이 부분을 잡고 다른 폴더로 이동합니다.";
   handle.innerHTML = iconMarkup("grip");
   handle.addEventListener("dragstart", (event) => {
     event.dataTransfer.effectAllowed = "move";
@@ -1462,6 +1549,9 @@ function renderSavedRatingControl(sound, isCollapsed = false) {
   const row = document.createElement("div");
   row.className = "saved-rating-row";
   row.classList.toggle("is-readonly", isCollapsed);
+  row.dataset.tooltip = isCollapsed
+    ? "최소화 상태에서는 적합도를 볼 수만 있습니다."
+    : "이 프로젝트에 얼마나 잘 맞는지 1점부터 5점까지 평가합니다.";
   const label = document.createElement("span");
   label.textContent = "적합도";
   if (isCollapsed) {
@@ -1496,6 +1586,7 @@ function renderSavedRatingControl(sound, isCollapsed = false) {
 function renderSavedNoteSummary(sound) {
   const box = document.createElement("div");
   box.className = "saved-note-box";
+  box.dataset.tooltip = "사용 장면, 컷 위치, 수정 필요점을 적어둔 메모입니다.";
   const label = document.createElement("span");
   label.className = "saved-note-label";
   label.textContent = "메모";
@@ -1529,6 +1620,7 @@ function setMiniPlayState(button, isPlaying) {
   button.classList.toggle("is-playing", isPlaying);
   button.title = isPlaying ? "일시정지" : "간단 재생";
   button.setAttribute("aria-label", isPlaying ? "일시정지" : "간단 재생");
+  button.dataset.tooltip = isPlaying ? "현재 미리듣기를 일시정지합니다." : "최소화 상태에서 바로 재생합니다.";
   button.innerHTML = iconMarkup(isPlaying ? "pause" : "play");
 }
 
@@ -2097,10 +2189,220 @@ function renderProviderStatus(providers) {
     const item = document.createElement("span");
     item.className = provider.enabled ? "provider-ok" : "provider-missing";
     item.title = provider.message || "";
+    item.dataset.tooltip = provider.message || "API 연결 상태입니다.";
     const statusLabel = provider.enabled ? (provider.configured ? "연결" : "익명") : "미설정";
     item.textContent = `${sourceLabel(provider.provider)} ${statusLabel}`;
     providerStatusEl.append(item);
   }
+}
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function startHelpTour() {
+  hideTooltip();
+  helpTourIndex = 0;
+  helpTourOverlay.hidden = false;
+  helpTourPopover.hidden = false;
+  document.body.classList.add("is-help-tour-active");
+  showHelpTourStep(0);
+}
+
+function closeHelpTour() {
+  clearHelpHighlight();
+  helpTourOverlay.hidden = true;
+  helpTourPopover.hidden = true;
+  document.body.classList.remove("is-help-tour-active");
+}
+
+function clearHelpHighlight() {
+  if (helpTourTarget) {
+    helpTourTarget.classList.remove("is-help-highlight");
+    helpTourTarget = null;
+  }
+}
+
+function resolveHelpTourTarget(step) {
+  const primary = document.querySelector(step.selector);
+  if (primary) {
+    return { element: primary, fallback: false };
+  }
+  const fallback = document.querySelector(step.fallbackSelector || step.selector);
+  return {
+    element: fallback || document.querySelector(".app-shell") || document.body,
+    fallback: true,
+  };
+}
+
+function showHelpTourStep(index) {
+  helpTourIndex = clampNumber(index, 0, HELP_TOUR_STEPS.length - 1);
+  const step = HELP_TOUR_STEPS[helpTourIndex];
+  if (step.expandSavedPanel) {
+    applySavedPanelCollapsed(false);
+  }
+
+  clearHelpHighlight();
+  const { element, fallback } = resolveHelpTourTarget(step);
+  helpTourTarget = element;
+  helpTourTarget.classList.add("is-help-highlight");
+  helpTourTarget.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+
+  helpTourStepEl.textContent = `${helpTourIndex + 1} / ${HELP_TOUR_STEPS.length}`;
+  helpTourTitleEl.textContent = step.title;
+  helpTourDescriptionEl.textContent = fallback && step.fallbackDescription ? step.fallbackDescription : step.description;
+  helpTourPrevButton.disabled = helpTourIndex === 0;
+  helpTourNextButton.textContent = helpTourIndex === HELP_TOUR_STEPS.length - 1 ? "완료" : "다음";
+
+  window.setTimeout(() => {
+    positionHelpTourPopover(helpTourTarget);
+    helpTourNextButton.focus({ preventScroll: true });
+  }, 260);
+}
+
+function positionHelpTourPopover(target) {
+  if (helpTourPopover.hidden) {
+    return;
+  }
+  const margin = 14;
+  const rect = target.getBoundingClientRect();
+  const popoverRect = helpTourPopover.getBoundingClientRect();
+  let top = rect.bottom + 12;
+  if (top + popoverRect.height > window.innerHeight - margin) {
+    top = rect.top - popoverRect.height - 12;
+  }
+  if (top < margin) {
+    top = window.innerHeight - popoverRect.height - margin;
+  }
+  const left = clampNumber(
+    rect.left + rect.width / 2 - popoverRect.width / 2,
+    margin,
+    Math.max(margin, window.innerWidth - popoverRect.width - margin)
+  );
+  helpTourPopover.style.left = `${left}px`;
+  helpTourPopover.style.top = `${Math.max(margin, top)}px`;
+}
+
+function initializeHelpTour() {
+  helpTourStartButton.addEventListener("click", startHelpTour);
+  helpTourOverlay.addEventListener("click", closeHelpTour);
+  helpTourCloseButton.addEventListener("click", closeHelpTour);
+  helpTourPrevButton.addEventListener("click", () => showHelpTourStep(helpTourIndex - 1));
+  helpTourNextButton.addEventListener("click", () => {
+    if (helpTourIndex === HELP_TOUR_STEPS.length - 1) {
+      closeHelpTour();
+      return;
+    }
+    showHelpTourStep(helpTourIndex + 1);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !helpTourPopover.hidden) {
+      closeHelpTour();
+    }
+  });
+  window.addEventListener("resize", () => {
+    if (helpTourTarget && !helpTourPopover.hidden) {
+      positionHelpTourPopover(helpTourTarget);
+    }
+    if (tooltipTarget && !helpTooltip.hidden) {
+      positionTooltip(tooltipTarget);
+    }
+  });
+  document.addEventListener(
+    "scroll",
+    () => {
+      if (helpTourTarget && !helpTourPopover.hidden) {
+        positionHelpTourPopover(helpTourTarget);
+      }
+      if (tooltipTarget && !helpTooltip.hidden) {
+        requestTooltipPosition(tooltipTarget);
+      }
+    },
+    true
+  );
+}
+
+function queueTooltip(target) {
+  if (!target?.dataset.tooltip || target.disabled || !helpTourPopover.hidden) {
+    return;
+  }
+  window.clearTimeout(tooltipTimer);
+  tooltipTimer = window.setTimeout(() => showTooltip(target), 500);
+}
+
+function showTooltip(target) {
+  const text = target.dataset.tooltip;
+  if (!text || target.disabled) {
+    return;
+  }
+  tooltipTarget = target;
+  helpTooltip.textContent = text;
+  helpTooltip.hidden = false;
+  positionTooltip(target);
+}
+
+function hideTooltip() {
+  window.clearTimeout(tooltipTimer);
+  tooltipTimer = null;
+  tooltipTarget = null;
+  helpTooltip.hidden = true;
+}
+
+function requestTooltipPosition(target) {
+  if (tooltipRaf) {
+    return;
+  }
+  tooltipRaf = window.requestAnimationFrame(() => {
+    tooltipRaf = null;
+    positionTooltip(target);
+  });
+}
+
+function positionTooltip(target) {
+  if (helpTooltip.hidden || !target) {
+    return;
+  }
+  const margin = 10;
+  const rect = target.getBoundingClientRect();
+  const tooltipRect = helpTooltip.getBoundingClientRect();
+  let top = rect.top - tooltipRect.height - 8;
+  if (top < margin) {
+    top = rect.bottom + 8;
+  }
+  const left = clampNumber(
+    rect.left + rect.width / 2 - tooltipRect.width / 2,
+    margin,
+    Math.max(margin, window.innerWidth - tooltipRect.width - margin)
+  );
+  helpTooltip.style.left = `${left}px`;
+  helpTooltip.style.top = `${clampNumber(top, margin, Math.max(margin, window.innerHeight - tooltipRect.height - margin))}px`;
+}
+
+function initializeTooltips() {
+  document.addEventListener("pointerover", (event) => {
+    const target = event.target.closest("[data-tooltip]");
+    if (target) {
+      queueTooltip(target);
+    }
+  });
+  document.addEventListener("pointerout", (event) => {
+    const target = event.target.closest("[data-tooltip]");
+    if (target && !target.contains(event.relatedTarget)) {
+      hideTooltip();
+    }
+  });
+  document.addEventListener("focusin", (event) => {
+    const target = event.target.closest("[data-tooltip]");
+    if (target) {
+      queueTooltip(target);
+    }
+  });
+  document.addEventListener("focusout", (event) => {
+    const target = event.target.closest("[data-tooltip]");
+    if (target) {
+      hideTooltip();
+    }
+  });
 }
 
 form.addEventListener("submit", searchSounds);
@@ -2137,6 +2439,8 @@ newFolderInput.addEventListener("keydown", (event) => {
   }
 });
 setupSearchModeConflicts();
+initializeHelpTour();
+initializeTooltips();
 applySavedPanelCollapsed(readSavedPanelCollapsed());
 renderSearchMemory();
 loadProviderStatus();

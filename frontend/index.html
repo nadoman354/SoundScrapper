@@ -18,6 +18,7 @@
             <p>사운드 후보 탐색기</p>
           </div>
         </div>
+        <button id="help-tour-start" class="help-tour-start" type="button">사용법 설명</button>
       </header>
 
       <section class="workspace-layout">
@@ -134,8 +135,15 @@
                   <input type="checkbox" data-search-mode="rights_safe" />
                   <span>저작권 안전 우선</span>
                 </label>
-                <label class="condition-chip">
-                  <input id="auto-analyze" type="checkbox" />
+                <label
+                  class="condition-chip"
+                  data-tooltip="검색 후 상위 후보 5개의 파형과 음량/무음 정보를 자동 분석합니다."
+                >
+                  <input
+                    id="auto-analyze"
+                    type="checkbox"
+                    data-tooltip="검색 후 상위 후보 5개의 파형과 음량/무음 정보를 자동 분석합니다."
+                  />
                   <span>상위 5개 자동 파형 분석</span>
                 </label>
               </fieldset>
@@ -164,6 +172,7 @@
             aria-expanded="true"
             aria-label="저장 후보 패널 접기"
             title="저장 후보 패널 접기"
+            data-tooltip="저장 후보 패널을 접거나 펼쳐 검색 영역의 폭을 조정합니다."
           >
             <span aria-hidden="true">›</span>
           </button>
@@ -210,8 +219,15 @@
             <p class="meta"></p>
           </div>
           <div class="score-stack">
-            <strong class="score" aria-label="점수"></strong>
-            <button class="save-icon" type="button" data-action="save" aria-pressed="false" aria-label="저장">
+            <strong class="score" aria-label="점수" data-tooltip="검색어, 길이, 라이선스, 분석값 등을 반영한 후보 점수입니다."></strong>
+            <button
+              class="save-icon"
+              type="button"
+              data-action="save"
+              aria-pressed="false"
+              aria-label="저장"
+              data-tooltip="후보를 저장하거나 저장 해제합니다. 폴더가 있으면 저장 위치를 선택합니다."
+            >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M6 3.75A2.25 2.25 0 0 1 8.25 1.5h7.5A2.25 2.25 0 0 1 18 3.75v18l-6-3.25-6 3.25v-18Z"></path>
               </svg>
@@ -231,8 +247,20 @@
 
         <div class="feedback-actions" aria-label="사용자 평가">
           <div class="feedback-group feedback-primary" aria-label="전체 평가">
-            <button type="button" data-feedback="good" data-feedback-group="preference" aria-pressed="false">좋음</button>
-            <button type="button" data-feedback="bad" data-feedback-group="preference" aria-pressed="false">별로</button>
+            <button
+              type="button"
+              data-feedback="good"
+              data-feedback-group="preference"
+              aria-pressed="false"
+              data-tooltip="좋은 후보로 평가합니다. 이후 비슷한 후보 판단에 참고됩니다."
+            >좋음</button>
+            <button
+              type="button"
+              data-feedback="bad"
+              data-feedback-group="preference"
+              aria-pressed="false"
+              data-tooltip="별로인 후보로 평가합니다. 이유를 함께 남기면 더 유용합니다."
+            >별로</button>
           </div>
           <div class="feedback-group feedback-details positive-reasons" aria-label="좋았던 점" hidden>
             <span class="feedback-title">활용성</span>
@@ -247,7 +275,7 @@
           </div>
           <div class="feedback-group bad-reasons" aria-label="마음에 안 든 점" hidden>
             <span class="feedback-title">마음에 안 든 점</span>
-            <button type="button" data-feedback="noise_bad" aria-pressed="false">잡음 많음</button>
+            <button type="button" data-feedback="noise_bad" aria-pressed="false" data-tooltip="마음에 안 든 이유를 남겨 비슷한 후보의 점수 보정에 활용합니다.">잡음 많음</button>
             <button type="button" data-feedback="leading_silence_bad" aria-pressed="false">앞 무음 김</button>
             <button type="button" data-feedback="too_sharp" aria-pressed="false">너무 날카로움</button>
             <button type="button" data-feedback="too_loud" aria-pressed="false">너무 큼</button>
@@ -258,9 +286,9 @@
           </div>
         </div>
         <div class="card-actions">
-          <button type="button" data-action="download">다운로드</button>
-          <a data-action="open" target="_blank" rel="noreferrer">원본 보기</a>
-          <button type="button" data-action="details">상세</button>
+          <button type="button" data-action="download" data-tooltip="현재 앱에서 접근 가능한 미리듣기 파일을 다운로드합니다.">다운로드</button>
+          <a data-action="open" target="_blank" rel="noreferrer" data-tooltip="원본 페이지에서 저작자, 라이선스, 고음질 파일 여부를 확인합니다.">원본 보기</a>
+          <button type="button" data-action="details" data-tooltip="점수 근거, 전체 태그, 라이선스/출처 정보, 고급 듣기 기능을 봅니다.">상세</button>
         </div>
         <details class="card-details">
           <summary>상세 정보와 고급 청취</summary>
@@ -270,17 +298,37 @@
           <div class="all-tags"></div>
           <p class="description"></p>
           <div class="analysis-actions">
-            <button type="button" data-action="waveform">파형 보기</button>
-            <button type="button" data-action="loop" aria-pressed="false">루프 듣기</button>
-            <button type="button" data-action="loop-start">A</button>
-            <button type="button" data-action="loop-end">B</button>
-            <button type="button" data-action="segment-loop" aria-pressed="false">구간 루프</button>
-            <button type="button" data-action="clear-loop">해제</button>
+            <button type="button" data-action="waveform" data-tooltip="오디오 파형과 무음/음량 분석을 표시합니다.">파형 보기</button>
+            <button type="button" data-action="loop" aria-pressed="false" data-tooltip="전체 미리듣기를 반복 재생합니다.">루프 듣기</button>
+            <button type="button" data-action="loop-start" data-tooltip="현재 재생 위치를 구간 반복 시작점으로 지정합니다.">A</button>
+            <button type="button" data-action="loop-end" data-tooltip="현재 재생 위치를 구간 반복 끝점으로 지정합니다.">B</button>
+            <button type="button" data-action="segment-loop" aria-pressed="false" data-tooltip="A/B로 지정한 구간을 반복 재생합니다.">구간 루프</button>
+            <button type="button" data-action="clear-loop" data-tooltip="루프와 A/B 구간 설정을 해제합니다.">해제</button>
             <span class="loop-status">Loop: Off</span>
           </div>
         </details>
       </article>
     </template>
+
+    <div id="help-tour-overlay" class="help-tour-overlay" hidden></div>
+    <section
+      id="help-tour-popover"
+      class="help-tour-popover"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="help-tour-title"
+      hidden
+    >
+      <span id="help-tour-step" class="help-tour-step"></span>
+      <h2 id="help-tour-title"></h2>
+      <p id="help-tour-description"></p>
+      <div class="help-tour-actions">
+        <button id="help-tour-prev" type="button">이전</button>
+        <button id="help-tour-close" type="button">닫기</button>
+        <button id="help-tour-next" type="button">다음</button>
+      </div>
+    </section>
+    <div id="help-tooltip" class="help-tooltip" role="tooltip" hidden></div>
 
     <footer class="site-footer">
       <div>
