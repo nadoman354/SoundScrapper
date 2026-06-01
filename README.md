@@ -104,6 +104,19 @@ Set a Google Cloud budget alert before sharing the link. See
 `deploy/google/README.md` for the full VM setup, firewall command, update
 commands, and cost risks.
 
+## DuckDNS Free Subdomain
+
+For friend-only sharing, use a free DuckDNS subdomain after the Google VM is
+working:
+
+```text
+http://soundscrapper.duckdns.org/
+```
+
+Create the DuckDNS subdomain, then point it to the Google VM public IP with the
+DuckDNS update URL from the VM. See `deploy/duckdns/README.md` for the exact
+commands, optional cron updater, and optional HTTPS setup.
+
 ## Oracle Always Free Deployment
 
 The Oracle Cloud Infrastructure (OCI) Always Free Ubuntu VM path remains

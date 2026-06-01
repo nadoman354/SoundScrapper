@@ -49,3 +49,10 @@ Reason:
   disk, which fits the current FastAPI + SQLite architecture.
 - Budget alerts and the Google Cloud console reduce operational risk compared
   with troubleshooting Oracle capacity and account constraints.
+
+### Use DuckDNS for friend-only sharing
+Reason:
+- The deployed Google VM already works through its public IP, so a free
+  subdomain is enough for private sharing.
+- DuckDNS avoids paid domain registration while giving a readable URL.
+- This remains a link-shared deployment, not an authenticated public product.
